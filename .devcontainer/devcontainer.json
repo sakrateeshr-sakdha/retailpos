@@ -1,0 +1,14 @@
+{
+  "name": "Retail POS",
+  "forwardPorts": [3000, 5000],
+  "portsAttributes": {
+    "3000": {
+      "label": "Retail POS Frontend",
+      "onAutoForward": "openBrowser"
+    },
+    "5000": {
+      "label": "Retail POS Backend",
+      "onAutoForward": "silent"
+    }
+  }
+}

@@ -1,3 +1,17 @@
 {
-    "git.ignoreLimitWarning": true
+    "git.ignoreLimitWarning": true,
+    "remote.portsAttributes": {
+        "3000": {
+            "label": "Retail POS Frontend",
+            "onAutoForward": "openBrowser",
+            "requireLocalPort": true,
+            "elevateIfNeeded": false
+        },
+        "5000": {
+            "label": "Retail POS Backend",
+            "onAutoForward": "silent",
+            "requireLocalPort": true,
+            "elevateIfNeeded": false
+        }
+    }
 }
