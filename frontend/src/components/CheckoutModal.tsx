@@ -7,8 +7,6 @@ import {
   CreditCard,
   User,
   AlertCircle,
-  Smartphone,
-  Edit3,
   RefreshCw,
   ExternalLink,
 } from 'lucide-react';
@@ -41,17 +39,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // UPI Dynamic QR States
-  const [merchantUpiId, setMerchantUpiId] = useState<string>(shop?.upiId || 'groceryshop@upi');
-  const [isEditingUpi, setIsEditingUpi] = useState<boolean>(false);
   const [qrGenerated, setQrGenerated] = useState<boolean>(false);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [upiString, setUpiString] = useState<string>('');
-
-  useEffect(() => {
-    if (shop?.upiId) {
-      setMerchantUpiId(shop.upiId);
-    }
-  }, [shop?.upiId]);
 
   // Reset QR state if total changes
   useEffect(() => {
@@ -61,10 +51,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   }, [total]);
 
   const handleGenerateQr = async () => {
-    const cleanUpi = (merchantUpiId || '').trim();
+    const cleanUpi = (shop?.upiId || 'groceryshop@upi').trim();
     if (!cleanUpi) {
-      setIsEditingUpi(true);
-      setErrorMsg('Please enter a valid Merchant UPI ID first');
+      setErrorMsg('Merchant UPI ID not configured. Please set it in Settings.');
       return;
     }
     setErrorMsg(null);
@@ -88,7 +77,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       setUpiString(uri);
       setQrDataUrl(dataUrl);
       setQrGenerated(true);
-      setIsEditingUpi(false);
     } catch (err: any) {
       console.error('Failed to generate UPI QR code', err);
       setErrorMsg('Failed to generate QR code. Please check UPI ID format.');
@@ -394,69 +382,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           {/* UPI: Dynamic QR Code Generator */}
           {paymentMethod === 'UPI' && (
             <div className="bg-blue-50/70 border border-blue-200 rounded-2xl p-3.5 space-y-3">
-              {/* Merchant UPI ID display & quick edit */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-bold text-gray-800 flex items-center gap-1.5">
-                    <Smartphone className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Merchant UPI ID</span>
-                  </label>
-                  {!isEditingUpi ? (
-                    <button
-                      type="button"
-                      onClick={() => setIsEditingUpi(true)}
-                      className="text-[11px] font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-0.5"
-                    >
-                      <Edit3 className="w-3 h-3" />
-                      <span>Change</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsEditingUpi(false);
-                        handleGenerateQr();
-                      }}
-                      className="text-[11px] font-semibold text-green-700 hover:text-green-800 flex items-center gap-0.5"
-                    >
-                      <Check className="w-3 h-3" />
-                      <span>Done</span>
-                    </button>
-                  )}
-                </div>
-
-                {isEditingUpi ? (
-                  <div className="flex gap-1.5">
-                    <input
-                      type="text"
-                      value={merchantUpiId}
-                      onChange={(e) => setMerchantUpiId(e.target.value)}
-                      placeholder="e.g. yourshop@okhdfcbank"
-                      className="flex-1 bg-white border border-blue-300 rounded-xl px-3 py-1.5 text-xs text-gray-900 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsEditingUpi(false);
-                        handleGenerateQr();
-                      }}
-                      className="bg-blue-600 text-white px-3 py-1.5 rounded-xl text-xs font-semibold shadow-xs"
-                    >
-                      Set
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between bg-white border border-blue-200 rounded-xl px-3 py-2 text-xs">
-                    <span className="font-semibold text-blue-950 font-mono">
-                      {merchantUpiId || 'No UPI ID set'}
-                    </span>
-                    <span className="text-[10px] bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded font-medium">
-                      Active UPI
-                    </span>
-                  </div>
-                )}
-              </div>
-
               {/* Dynamic QR Code display OR Generate Button */}
               {qrGenerated && qrDataUrl ? (
                 <div className="space-y-2.5">

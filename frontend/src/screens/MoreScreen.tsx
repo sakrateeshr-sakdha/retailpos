@@ -12,6 +12,7 @@ import {
   Check,
   Plus,
   X,
+  QrCode,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
@@ -218,6 +219,47 @@ export const MoreScreen: React.FC = () => {
         </div>
       )}
 
+      {/* Read-Only Shop Profile & Merchant UPI for Cashiers */}
+      {!isAdmin && shop && (
+        <div className="bg-white border border-gray-200 rounded-2xl p-4 shadow-xs space-y-3">
+          <div className="flex items-center space-x-2">
+            <Store className="w-5 h-5 text-green-600" />
+            <div>
+              <div className="font-bold text-sm text-gray-900">Shop Profile & Merchant UPI</div>
+              <div className="text-[11px] text-gray-500">Configured by Shop Administrator</div>
+            </div>
+          </div>
+
+          <div className="space-y-2 pt-1 divide-y divide-gray-100 text-xs">
+            <div className="flex justify-between items-center py-1.5">
+              <span className="text-gray-500">Shop Name</span>
+              <span className="font-semibold text-gray-900">{shop.name}</span>
+            </div>
+            <div className="flex justify-between items-center py-1.5">
+              <span className="text-gray-500 flex items-center gap-1">
+                <QrCode className="w-3.5 h-3.5 text-blue-600" />
+                <span>Merchant UPI ID</span>
+              </span>
+              <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200">
+                {shop.upiId || 'Not configured'}
+              </span>
+            </div>
+            {shop.phone && (
+              <div className="flex justify-between items-center py-1.5">
+                <span className="text-gray-500">Phone</span>
+                <span className="font-medium text-gray-800">{shop.phone}</span>
+              </div>
+            )}
+            {shop.gstNumber && (
+              <div className="flex justify-between items-center py-1.5">
+                <span className="text-gray-500">GSTIN</span>
+                <span className="font-mono text-gray-800">{shop.gstNumber}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Shop Profile & Settings */}
       {isAdmin && (
         <div className="bg-white border border-gray-200 rounded-2xl p-4 shadow-xs space-y-3">
@@ -279,19 +321,29 @@ export const MoreScreen: React.FC = () => {
               </div>
             </div>
 
-            <div>
-              <label className="font-semibold text-gray-700 block mb-1">
-                Merchant UPI ID (for Dynamic QR Checkout)
+            <div className="bg-blue-50/60 border border-blue-200 rounded-xl p-3 space-y-1.5">
+              <label className="font-bold text-gray-800 text-xs flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <QrCode className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Merchant UPI ID</span>
+                </span>
+                <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded font-semibold">
+                  Dynamic QR Checkout
+                </span>
               </label>
               <input
                 type="text"
                 value={upiId}
                 onChange={(e) => setUpiId(e.target.value)}
                 placeholder="e.g. yourshop@okhdfcbank, 9876543210@paytm"
-                className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900"
+                className="w-full bg-white border border-blue-300 rounded-xl px-3 py-2 text-sm text-gray-900 font-mono focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
-              <p className="text-[10px] text-gray-500 mt-0.5">
-                Generates instant scan & pay dynamic QR codes with exact bill amount on checkout.
+              <div className="text-[11px] text-gray-600 flex items-center justify-between pt-0.5">
+                <span>Active in System:</span>
+                <span className="font-mono font-bold text-blue-900">{shop?.upiId || upiId || 'Not configured'}</span>
+              </div>
+              <p className="text-[10px] text-gray-500">
+                This Merchant UPI ID is configured here and automatically embedded into dynamic QR codes at checkout without being displayed on the customer checkout screen.
               </p>
             </div>
 
