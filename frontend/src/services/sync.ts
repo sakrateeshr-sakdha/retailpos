@@ -14,6 +14,7 @@ export async function syncPendingSales(): Promise<{ success: boolean; count: num
 
     const payload = pending.map((sale) => ({
       idempotencyKey: sale.idempotencyKey,
+      customerId: sale.customerId || undefined,
       items: sale.items,
       subtotal: sale.subtotal,
       discount: sale.discount,

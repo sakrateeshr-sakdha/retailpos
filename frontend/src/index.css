@@ -34,21 +34,55 @@
   background: #94a3b8;
 }
 
-/* Print Styles for thermal / normal receipts */
+/* Thermal POS Receipt Printing Styles */
+@page {
+  margin: 0;
+  size: auto;
+}
+
 @media print {
+  html, body {
+    height: auto !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
   body * {
     visibility: hidden;
   }
+
   #printable-receipt, #printable-receipt * {
     visibility: visible;
   }
+
   #printable-receipt {
     position: absolute;
     left: 0;
     top: 0;
-    width: 100%;
-    margin: 0;
-    padding: 10px;
-    background: white;
+    margin: 0 !important;
+    padding: 3mm !important;
+    box-shadow: none !important;
+    border: none !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-family: 'Courier New', Courier, monospace !important;
+    word-break: break-word !important;
+  }
+
+  #printable-receipt.receipt-58mm {
+    width: 48mm !important;
+    max-width: 48mm !important;
+    font-size: 10px !important;
+    line-height: 1.25 !important;
+  }
+
+  #printable-receipt.receipt-80mm {
+    width: 72mm !important;
+    max-width: 72mm !important;
+    font-size: 12px !important;
+    line-height: 1.35 !important;
   }
 }
+

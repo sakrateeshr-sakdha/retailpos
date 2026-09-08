@@ -8,13 +8,19 @@ import {
   Calendar,
   ChevronRight,
   RefreshCw,
+  Lock,
 } from 'lucide-react';
 import { Sale, SalesSummary } from '../types/index';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { ReceiptModal } from '../components/ReceiptModal';
+import { NavTab } from '../components/BottomNav';
 
-export const SalesScreen: React.FC = () => {
+interface SalesScreenProps {
+  onNavigate?: (tab: NavTab) => void;
+}
+
+export const SalesScreen: React.FC<SalesScreenProps> = ({ onNavigate }) => {
   const { shop, isOnline } = useAuth();
   const [sales, setSales] = useState<Sale[]>([]);
   const [summary, setSummary] = useState<SalesSummary | null>(null);
@@ -51,78 +57,91 @@ export const SalesScreen: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-24 max-w-lg mx-auto">
+    <div className="min-h-screen pb-24 w-full space-y-4">
       {/* Top Today Summary Cards */}
-      <div className="p-3 bg-green-700 text-white space-y-2.5 shadow-sm">
+      <div className="p-4 sm:p-5 bg-green-700 text-white space-y-3 shadow-xs rounded-2xl">
         <div className="flex items-center justify-between text-xs text-green-100">
           <span className="font-semibold uppercase tracking-wider">Today's Sales Summary</span>
-          <button
-            onClick={loadSalesData}
-            className="p-1 rounded-full hover:bg-green-800 transition"
-            title="Refresh"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          </button>
+          <div className="flex items-center gap-2">
+            {onNavigate && (
+              <button
+                onClick={() => onNavigate('closing')}
+                className="bg-white/20 hover:bg-white/30 text-white font-bold px-2.5 py-1 rounded-lg text-xs transition flex items-center gap-1 active:scale-95"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>Daily Register Closing</span>
+              </button>
+            )}
+            <button
+              onClick={loadSalesData}
+              className="p-1 rounded-full hover:bg-green-800 transition"
+              title="Refresh"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         </div>
 
-        {/* Big Amount Card */}
-        <div className="bg-white/10 rounded-2xl p-3.5 backdrop-blur-xs border border-white/15">
-          <div className="text-xs text-green-200">Total Sales</div>
-          <div className="text-3xl font-black tracking-tight mt-0.5">
-            {currency}{(summary?.today?.totalAmount || 0).toFixed(2)}
-          </div>
-          <div className="text-xs text-green-200 mt-1">
-            {summary?.today?.billCount || 0} bills completed today
-          </div>
-        </div>
-
-        {/* Breakdown Chips (Cash vs UPI vs Card) */}
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="bg-white/10 rounded-xl p-2.5 border border-white/10 flex items-center space-x-2">
-            <div className="p-1.5 rounded-lg bg-green-800 text-green-300">
-              <Banknote className="w-4 h-4" />
+        {/* Amount & Breakdown Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* Big Amount Card */}
+          <div className="bg-white/10 rounded-2xl p-4 backdrop-blur-xs border border-white/15">
+            <div className="text-xs text-green-200 font-medium">Total Sales</div>
+            <div className="text-3xl font-black tracking-tight mt-0.5">
+              {currency}{(summary?.today?.totalAmount || 0).toFixed(2)}
             </div>
-            <div>
-              <div className="text-[10px] text-green-200">Cash Sales</div>
-              <div className="font-bold text-sm">
-                {currency}{(summary?.today?.cashAmount || 0).toFixed(0)}
+            <div className="text-xs text-green-200 mt-1">
+              {summary?.today?.billCount || 0} bills completed today
+            </div>
+          </div>
+
+          {/* Breakdown Chips (Cash vs UPI) */}
+          <div className="sm:col-span-2 grid grid-cols-2 gap-2.5">
+            <div className="bg-white/10 rounded-xl p-3 border border-white/10 flex items-center space-x-3">
+              <div className="p-2 rounded-lg bg-green-800 text-green-300 flex-shrink-0">
+                <Banknote className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="text-[11px] text-green-200">Cash Sales</div>
+                <div className="font-bold text-base">
+                  {currency}{(summary?.today?.cashAmount || 0).toFixed(0)}
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="bg-white/10 rounded-xl p-2.5 border border-white/10 flex items-center space-x-2">
-            <div className="p-1.5 rounded-lg bg-blue-800 text-blue-300">
-              <QrCode className="w-4 h-4" />
-            </div>
-            <div>
-              <div className="text-[10px] text-green-200">UPI Sales</div>
-              <div className="font-bold text-sm">
-                {currency}{(summary?.today?.upiAmount || 0).toFixed(0)}
+            <div className="bg-white/10 rounded-xl p-3 border border-white/10 flex items-center space-x-3">
+              <div className="p-2 rounded-lg bg-blue-800 text-blue-300 flex-shrink-0">
+                <QrCode className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="text-[11px] text-green-200">UPI Sales</div>
+                <div className="font-bold text-base">
+                  {currency}{(summary?.today?.upiAmount || 0).toFixed(0)}
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Date Range Selector */}
-      <div className="p-3 bg-white border-b border-gray-200 space-y-2">
-        <div className="flex gap-1.5">
+      {/* Date Range Selector & Search */}
+      <div className="p-3 sm:p-4 bg-white rounded-2xl border border-gray-200 shadow-xs space-y-3">
+        <div className="flex gap-2 overflow-x-auto no-scrollbar">
           {(['today', 'yesterday', 'thisWeek', 'thisMonth'] as const).map((r) => (
             <button
               key={r}
               onClick={() => setRange(r)}
-              className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition capitalize ${
+              className={`flex-1 min-w-[80px] py-2 text-xs font-semibold rounded-xl transition capitalize ${
                 range === r
-                  ? 'bg-gray-900 text-white'
+                  ? 'bg-green-700 text-white shadow-xs'
                   : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
               }`}
             >
-              {r === 'thisWeek' ? 'Week' : r === 'thisMonth' ? 'Month' : r}
+              {r === 'thisWeek' ? 'This Week' : r === 'thisMonth' ? 'This Month' : r}
             </button>
           ))}
         </div>
 
-        {/* Search Input */}
         <form onSubmit={handleSearchSubmit} className="relative">
           <Search className="w-4 h-4 absolute left-3 top-2.5 text-gray-400" />
           <input
@@ -130,17 +149,19 @@ export const SalesScreen: React.FC = () => {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search bill number or customer..."
-            className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-9 pr-3 py-1.5 text-xs text-gray-900 focus:outline-none focus:border-green-500"
+            className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-9 pr-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-green-500 transition"
           />
         </form>
       </div>
 
-      {/* Sales History List */}
-      <div className="p-3 space-y-2">
-        <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 flex justify-between">
+      {/* Sales History List Grid */}
+      <div className="space-y-2">
+        <div className="text-xs font-bold text-gray-500 uppercase tracking-wider px-1 flex justify-between">
           <span>Invoices ({sales.length})</span>
-          <span>Tap to View Receipt</span>
+          <span className="text-[11px] text-gray-400">Tap to View Receipt</span>
         </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
 
         {loading ? (
           <div className="py-12 text-center text-xs text-gray-500 animate-pulse">
@@ -200,6 +221,7 @@ export const SalesScreen: React.FC = () => {
             );
           })
         )}
+        </div>
       </div>
 
       {/* Receipt Modal for Viewed Sale */}

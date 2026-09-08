@@ -23,6 +23,15 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   const currentShop = sale.shop || shop;
   const currency = currentShop?.currency || '₹';
 
+  const [paperSize, setPaperSize] = React.useState<'58mm' | '80mm'>(() => {
+    return (localStorage.getItem('pos_receipt_paper_size') as '58mm' | '80mm') || '58mm';
+  });
+
+  const handlePaperSizeChange = (size: '58mm' | '80mm') => {
+    setPaperSize(size);
+    localStorage.setItem('pos_receipt_paper_size', size);
+  };
+
   const handlePrint = () => {
     window.print();
   };
@@ -52,7 +61,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="bg-white w-full max-w-sm sm:rounded-2xl rounded-t-2xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-200">
+      <div className="bg-white w-full max-w-md sm:rounded-2xl rounded-t-2xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-200">
         {/* Success Header Bar */}
         <div className="bg-green-600 text-white p-3.5 flex items-center justify-between">
           <div className="flex items-center space-x-2">
@@ -67,11 +76,42 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
           </button>
         </div>
 
+        {/* Paper Size Selector */}
+        <div className="bg-gray-100 px-4 py-2 flex items-center justify-between border-b border-gray-200">
+          <span className="text-[11px] font-bold text-gray-600 uppercase tracking-wide">
+            Thermal Roll:
+          </span>
+          <div className="flex space-x-1 bg-gray-200 p-0.5 rounded-lg text-xs font-semibold">
+            <button
+              type="button"
+              onClick={() => handlePaperSizeChange('58mm')}
+              className={`px-2.5 py-1 rounded-md transition ${
+                paperSize === '58mm'
+                  ? 'bg-white text-gray-900 shadow-xs'
+                  : 'text-gray-500 hover:text-gray-900'
+              }`}
+            >
+              58mm (2-inch)
+            </button>
+            <button
+              type="button"
+              onClick={() => handlePaperSizeChange('80mm')}
+              className={`px-2.5 py-1 rounded-md transition ${
+                paperSize === '80mm'
+                  ? 'bg-white text-gray-900 shadow-xs'
+                  : 'text-gray-500 hover:text-gray-900'
+              }`}
+            >
+              80mm (3-inch)
+            </button>
+          </div>
+        </div>
+
         {/* Printable Thermal Receipt Card */}
         <div className="p-4 overflow-y-auto flex-1 text-gray-800 text-xs">
           <div
             id="printable-receipt"
-            className="bg-gray-50 border border-dashed border-gray-300 rounded-xl p-4 font-mono shadow-inner"
+            className={`bg-gray-50 border border-dashed border-gray-300 rounded-xl p-4 font-mono shadow-inner receipt-${paperSize}`}
           >
             {/* Header */}
             <div className="text-center pb-3 border-b border-dashed border-gray-300">
@@ -155,6 +195,31 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
                 <div className="flex justify-between text-red-600 font-semibold">
                   <span>Discount:</span>
                   <span>-{currency}{Number(sale.discount).toFixed(2)}</span>
+                </div>
+              )}
+              {currentShop?.gstEnabled && (
+                <div className="pt-1 border-t border-dashed border-gray-200 text-[11px] space-y-0.5 text-gray-600">
+                  {Number(currentShop.defaultIgstRate) > 0 ? (
+                    <div className="flex justify-between">
+                      <span>IGST ({Number(currentShop.defaultIgstRate)}%):</span>
+                      <span>{currency}{((Number(sale.total) * Number(currentShop.defaultIgstRate)) / (100 + (currentShop.gstType === 'INCLUSIVE' ? Number(currentShop.defaultIgstRate) : 0))).toFixed(2)}</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex justify-between">
+                        <span>CGST ({Number(currentShop.defaultCgstRate || 2.5)}%):</span>
+                        <span>{currency}{((Number(sale.total) * Number(currentShop.defaultCgstRate || 2.5)) / (100 + (currentShop.gstType === 'INCLUSIVE' ? (Number(currentShop.defaultCgstRate || 2.5) + Number(currentShop.defaultSgstRate || 2.5)) : 0))).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>SGST ({Number(currentShop.defaultSgstRate || 2.5)}%):</span>
+                        <span>{currency}{((Number(sale.total) * Number(currentShop.defaultSgstRate || 2.5)) / (100 + (currentShop.gstType === 'INCLUSIVE' ? (Number(currentShop.defaultCgstRate || 2.5) + Number(currentShop.defaultSgstRate || 2.5)) : 0))).toFixed(2)}</span>
+                      </div>
+                    </>
+                  )}
+                  <div className="text-[10px] text-gray-400 italic">
+                    {currentShop.gstType === 'INCLUSIVE' ? 'Prices inclusive of GST' : 'Prices exclusive of GST'}
+                    {currentShop.defaultHsnCode ? ` | HSN: ${currentShop.defaultHsnCode}` : ''}
+                  </div>
                 </div>
               )}
               <div className="flex justify-between text-base font-extrabold text-gray-900 pt-1 border-t border-gray-200">

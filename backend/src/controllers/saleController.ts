@@ -36,11 +36,126 @@ const createSaleSchema = z.object({
   createdAt: z.string().datetime().optional(), // For offline sales syncing with client timestamp
 });
 
-// Helper to generate next invoice number for a shop
+const round2 = (val: number): number => Math.round((val + Number.EPSILON) * 100) / 100;
+
+// Helper to generate next invoice number for a shop atomically without race conditions
 async function getNextInvoiceNumber(tx: Prisma.TransactionClient, shopId: string, prefix = 'INV-'): Promise<string> {
-  const count = await tx.sale.count({ where: { shopId } });
-  const nextNum = 1000 + count + 1;
-  return `${prefix}${nextNum}`;
+  const sequence = await tx.shopInvoiceSequence.upsert({
+    where: { shopId },
+    create: {
+      shopId,
+      nextInvoiceNumber: 1002, // 1001 is used for this sale
+    },
+    update: {
+      nextInvoiceNumber: {
+        increment: 1,
+      },
+    },
+  });
+
+  const assignedNum = sequence.nextInvoiceNumber - 1;
+  return `${prefix}${assignedNum}`;
+}
+
+interface ValidatedItem {
+  productId: string;
+  productName: string;
+  unit: string;
+  quantity: number;
+  unitPrice: number;
+  purchasePrice: Prisma.Decimal;
+  lineTotal: number;
+  prod: any;
+}
+
+function validateAndComputeSaleFinancials(
+  items: z.infer<typeof saleItemSchema>[],
+  discountInput: number,
+  submittedSubtotal: number,
+  submittedTotal: number,
+  productMap: Map<string, any>,
+  allowNegativeStock: boolean
+): {
+  validatedItems: ValidatedItem[];
+  subtotal: number;
+  discount: number;
+  total: number;
+} {
+  if (!items || items.length === 0) {
+    throw new Error('Cart cannot be empty. Please add products.');
+  }
+
+  const validatedItems: ValidatedItem[] = [];
+  let calculatedSubtotal = 0;
+
+  for (const item of items) {
+    if (item.quantity <= 0) {
+      throw new Error(`Quantity must be greater than 0 for product: ${item.productName || item.productId}`);
+    }
+    if (item.unitPrice < 0) {
+      throw new Error(`Unit price cannot be negative for product: ${item.productName || item.productId}`);
+    }
+
+    const prod = productMap.get(item.productId);
+    if (!prod) {
+      throw new Error(`Product not found or belongs to another shop: ${item.productName || item.productId}`);
+    }
+
+    const currentStock = Number(prod.stockQuantity);
+    if (!allowNegativeStock && currentStock < item.quantity) {
+      throw new Error(
+        `Insufficient stock for "${prod.name}". Available: ${currentStock} ${prod.unit}, Requested: ${item.quantity} ${prod.unit}`
+      );
+    }
+
+    const lineTotal = round2(item.quantity * item.unitPrice);
+    if (item.totalPrice !== undefined && Math.abs(item.totalPrice - lineTotal) > 0.05) {
+      throw new Error(
+        `Line total mismatch for "${prod.name}". Calculated: ${lineTotal}, Submitted: ${item.totalPrice}`
+      );
+    }
+
+    calculatedSubtotal = round2(calculatedSubtotal + lineTotal);
+
+    validatedItems.push({
+      productId: prod.id,
+      productName: prod.name,
+      unit: item.unit || prod.unit,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      purchasePrice: prod.purchasePrice,
+      lineTotal,
+      prod,
+    });
+  }
+
+  if (discountInput < 0) {
+    throw new Error('Discount cannot be negative');
+  }
+  if (discountInput > calculatedSubtotal) {
+    throw new Error(`Discount (${discountInput}) cannot be greater than subtotal (${calculatedSubtotal})`);
+  }
+
+  if (Math.abs(submittedSubtotal - calculatedSubtotal) > 0.05) {
+    throw new Error(
+      `Subtotal mismatch: submitted (${submittedSubtotal}) does not match calculated subtotal (${calculatedSubtotal})`
+    );
+  }
+
+  const calculatedTotal = round2(calculatedSubtotal - discountInput);
+
+  if (Math.abs(submittedTotal - calculatedTotal) > 0.05) {
+    throw new Error(
+      `Total mismatch: submitted (${submittedTotal}) does not match calculated total (${calculatedTotal})`
+    );
+  }
+
+  return {
+    validatedItems,
+    subtotal: calculatedSubtotal,
+    discount: discountInput,
+    total: calculatedTotal,
+  };
 }
 
 export const createSale = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -72,10 +187,16 @@ export const createSale = async (req: Request, res: Response, next: NextFunction
       });
 
       if (existingSale) {
+        const primaryPay = existingSale.payments?.[0];
+        const enrichedExisting = {
+          ...existingSale,
+          cashReceived: primaryPay?.cashReceived ? Number(primaryPay.cashReceived) : null,
+          changeGiven: primaryPay?.changeGiven ? Number(primaryPay.changeGiven) : null,
+        };
         res.json({
           success: true,
           message: 'Sale already recorded (idempotent)',
-          sale: existingSale,
+          sale: enrichedExisting,
           isDuplicate: true,
         });
         return;
@@ -99,25 +220,29 @@ export const createSale = async (req: Request, res: Response, next: NextFunction
 
       const productMap = new Map(dbProducts.map((p) => [p.id, p]));
 
-      // Check stock availability
-      for (const item of data.items) {
-        const prod = productMap.get(item.productId);
-        if (!prod) {
-          throw new Error(`Product not found or has been removed: ${item.productName || item.productId}`);
-        }
+      // Server-side authoritative financial calculation and validation
+      const { validatedItems, subtotal, discount, total } = validateAndComputeSaleFinancials(
+        data.items,
+        data.discount,
+        data.subtotal,
+        data.total,
+        productMap,
+        shop.allowNegativeStock
+      );
 
-        const currentStock = Number(prod.stockQuantity);
-        if (!shop.allowNegativeStock && currentStock < item.quantity) {
-          throw new Error(
-            `Insufficient stock for "${prod.name}". Available: ${currentStock} ${prod.unit}, Requested: ${item.quantity} ${prod.unit}`
-          );
+      // Validate cash tendered if cash payment
+      let computedChangeGiven: number | null = null;
+      if (data.paymentMethod === PaymentMethod.CASH && data.cashReceived !== null && data.cashReceived !== undefined) {
+        if (data.cashReceived < total) {
+          throw new Error(`Cash received (${data.cashReceived}) cannot be less than bill total (${total})`);
         }
+        computedChangeGiven = round2(data.cashReceived - total);
       }
 
-      // Generate invoice number
+      // Generate next invoice number atomically using ShopInvoiceSequence
       const invoiceNumber = await getNextInvoiceNumber(tx, shopId, shop.invoicePrefix || 'INV-');
 
-      // Create Sale
+      // Create Sale with authoritative totals
       const sale = await tx.sale.create({
         data: {
           shopId,
@@ -125,9 +250,9 @@ export const createSale = async (req: Request, res: Response, next: NextFunction
           customerId: data.customerId || null,
           invoiceNumber,
           idempotencyKey: data.idempotencyKey || null,
-          subtotal: new Prisma.Decimal(data.subtotal),
-          discount: new Prisma.Decimal(data.discount),
-          total: new Prisma.Decimal(data.total),
+          subtotal: new Prisma.Decimal(subtotal),
+          discount: new Prisma.Decimal(discount),
+          total: new Prisma.Decimal(total),
           paymentMethod: data.paymentMethod,
           status: SaleStatus.COMPLETED,
           notes: data.notes || null,
@@ -136,39 +261,34 @@ export const createSale = async (req: Request, res: Response, next: NextFunction
       });
 
       // Create Sale Items and update stock
-      for (const item of data.items) {
-        const prod = productMap.get(item.productId)!;
-        const currentStock = Number(prod.stockQuantity);
+      for (const item of validatedItems) {
+        const currentStock = Number(item.prod.stockQuantity);
         const newStock = currentStock - item.quantity;
 
-        // Create item
-        const calculatedTotal = item.totalPrice !== undefined ? item.totalPrice : (item.quantity * item.unitPrice);
         await tx.saleItem.create({
           data: {
             saleId: sale.id,
-            productId: prod.id,
-            productName: prod.name,
+            productId: item.prod.id,
+            productName: item.productName,
             quantity: new Prisma.Decimal(item.quantity),
-            unit: item.unit || prod.unit,
+            unit: item.unit,
             unitPrice: new Prisma.Decimal(item.unitPrice),
-            purchasePrice: prod.purchasePrice,
-            totalPrice: new Prisma.Decimal(calculatedTotal),
+            purchasePrice: item.purchasePrice,
+            totalPrice: new Prisma.Decimal(item.lineTotal),
           },
         });
 
-        // Update product stock
         await tx.product.update({
-          where: { id: prod.id },
+          where: { id: item.prod.id },
           data: {
             stockQuantity: new Prisma.Decimal(newStock),
           },
         });
 
-        // Record stock movement
         await tx.stockMovement.create({
           data: {
             shopId,
-            productId: prod.id,
+            productId: item.prod.id,
             type: MovementType.SALE,
             quantity: new Prisma.Decimal(item.quantity),
             previousStock: new Prisma.Decimal(currentStock),
@@ -198,9 +318,9 @@ export const createSale = async (req: Request, res: Response, next: NextFunction
           data: {
             saleId: sale.id,
             method: data.paymentMethod,
-            amount: new Prisma.Decimal(data.total),
+            amount: new Prisma.Decimal(total),
             cashReceived: data.cashReceived ? new Prisma.Decimal(data.cashReceived) : null,
-            changeGiven: data.changeGiven ? new Prisma.Decimal(data.changeGiven) : null,
+            changeGiven: computedChangeGiven !== null ? new Prisma.Decimal(computedChangeGiven) : null,
           },
         });
       }
@@ -211,13 +331,12 @@ export const createSale = async (req: Request, res: Response, next: NextFunction
           where: { id: data.customerId },
           data: {
             totalCredit: {
-              increment: new Prisma.Decimal(data.total),
+              increment: new Prisma.Decimal(total),
             },
           },
         });
       }
 
-      // Return fully populated sale
       return tx.sale.findUnique({
         where: { id: sale.id },
         include: {
@@ -229,13 +348,65 @@ export const createSale = async (req: Request, res: Response, next: NextFunction
       });
     });
 
+    const primaryPay = result?.payments?.[0];
+    const enrichedSale = result
+      ? {
+          ...result,
+          cashReceived: primaryPay?.cashReceived ? Number(primaryPay.cashReceived) : null,
+          changeGiven: primaryPay?.changeGiven ? Number(primaryPay.changeGiven) : null,
+        }
+      : result;
+
     res.status(201).json({
       success: true,
       message: 'Sale completed successfully',
-      sale: result,
+      sale: enrichedSale,
     });
   } catch (error: any) {
-    if (error.message?.includes('Insufficient stock') || error.message?.includes('Product not found')) {
+    if (
+      error.code === 'P2002' &&
+      (error.meta?.target?.includes('idempotencyKey') || String(error.message).includes('idempotencyKey'))
+    ) {
+      if (req.body?.idempotencyKey) {
+        const existing = await prisma.sale.findUnique({
+          where: { idempotencyKey: req.body.idempotencyKey },
+          include: {
+            items: true,
+            payments: true,
+            customer: true,
+            user: { select: { id: true, name: true, username: true } },
+          },
+        });
+        if (existing) {
+          const primaryPay = existing.payments?.[0];
+          const enrichedExisting = {
+            ...existing,
+            cashReceived: primaryPay?.cashReceived ? Number(primaryPay.cashReceived) : null,
+            changeGiven: primaryPay?.changeGiven ? Number(primaryPay.changeGiven) : null,
+          };
+          res.status(200).json({
+            success: true,
+            message: 'Sale already recorded (idempotent)',
+            sale: enrichedExisting,
+            isDuplicate: true,
+          });
+          return;
+        }
+      }
+    }
+
+    if (
+      error.message?.includes('Insufficient stock') ||
+      error.message?.includes('Product not found') ||
+      error.message?.includes('mismatch') ||
+      error.message?.includes('match') ||
+      error.message?.includes('Subtotal') ||
+      error.message?.includes('Total') ||
+      error.message?.includes('Discount') ||
+      error.message?.includes('Cash received') ||
+      error.message?.includes('Quantity') ||
+      error.message?.includes('Unit price')
+    ) {
       res.status(400).json({ success: false, message: error.message });
       return;
     }
@@ -301,6 +472,15 @@ export const syncSales = async (req: Request, res: Response, next: NextFunction)
           });
           const productMap = new Map(dbProducts.map((p) => [p.id, p]));
 
+          const { validatedItems, subtotal, discount, total } = validateAndComputeSaleFinancials(
+            data.items,
+            data.discount,
+            data.subtotal,
+            data.total,
+            productMap,
+            shop.allowNegativeStock
+          );
+
           const invoiceNumber = await getNextInvoiceNumber(tx, shopId, shop.invoicePrefix || 'INV-');
 
           const sale = await tx.sale.create({
@@ -310,9 +490,9 @@ export const syncSales = async (req: Request, res: Response, next: NextFunction)
               customerId: data.customerId || null,
               invoiceNumber,
               idempotencyKey: data.idempotencyKey || null,
-              subtotal: new Prisma.Decimal(data.subtotal),
-              discount: new Prisma.Decimal(data.discount),
-              total: new Prisma.Decimal(data.total),
+              subtotal: new Prisma.Decimal(subtotal),
+              discount: new Prisma.Decimal(discount),
+              total: new Prisma.Decimal(total),
               paymentMethod: data.paymentMethod,
               status: SaleStatus.COMPLETED,
               notes: data.notes || null,
@@ -320,51 +500,47 @@ export const syncSales = async (req: Request, res: Response, next: NextFunction)
             },
           });
 
-          for (const item of data.items) {
-            const prod = productMap.get(item.productId);
-            const currentStock = prod ? Number(prod.stockQuantity) : 0;
+          for (const item of validatedItems) {
+            const currentStock = Number(item.prod.stockQuantity);
             const newStock = currentStock - item.quantity;
 
-            const calculatedTotal = item.totalPrice !== undefined ? item.totalPrice : (item.quantity * item.unitPrice);
             await tx.saleItem.create({
               data: {
                 saleId: sale.id,
-                productId: prod?.id || null,
-                productName: prod?.name || item.productName || 'Product',
+                productId: item.prod.id,
+                productName: item.productName,
                 quantity: new Prisma.Decimal(item.quantity),
-                unit: item.unit || prod?.unit || 'pcs',
+                unit: item.unit,
                 unitPrice: new Prisma.Decimal(item.unitPrice),
-                purchasePrice: prod ? prod.purchasePrice : new Prisma.Decimal(0),
-                totalPrice: new Prisma.Decimal(calculatedTotal),
+                purchasePrice: item.purchasePrice,
+                totalPrice: new Prisma.Decimal(item.lineTotal),
               },
             });
 
-            if (prod) {
-              await tx.product.update({
-                where: { id: prod.id },
-                data: { stockQuantity: new Prisma.Decimal(newStock) },
-              });
+            await tx.product.update({
+              where: { id: item.prod.id },
+              data: { stockQuantity: new Prisma.Decimal(newStock) },
+            });
 
-              await tx.stockMovement.create({
-                data: {
-                  shopId,
-                  productId: prod.id,
-                  type: MovementType.SALE,
-                  quantity: new Prisma.Decimal(item.quantity),
-                  previousStock: new Prisma.Decimal(currentStock),
-                  newStock: new Prisma.Decimal(newStock),
-                  reason: `Offline Sync Sale ${invoiceNumber}`,
-                  referenceId: sale.id,
-                },
-              });
-            }
+            await tx.stockMovement.create({
+              data: {
+                shopId,
+                productId: item.prod.id,
+                type: MovementType.SALE,
+                quantity: new Prisma.Decimal(item.quantity),
+                previousStock: new Prisma.Decimal(currentStock),
+                newStock: new Prisma.Decimal(newStock),
+                reason: `Offline Sync Sale ${invoiceNumber}`,
+                referenceId: sale.id,
+              },
+            });
           }
 
           await tx.payment.create({
             data: {
               saleId: sale.id,
               method: data.paymentMethod,
-              amount: new Prisma.Decimal(data.total),
+              amount: new Prisma.Decimal(total),
               cashReceived: data.cashReceived ? new Prisma.Decimal(data.cashReceived) : null,
               changeGiven: data.changeGiven ? new Prisma.Decimal(data.changeGiven) : null,
             },
@@ -373,7 +549,7 @@ export const syncSales = async (req: Request, res: Response, next: NextFunction)
           if (data.customerId && data.paymentMethod === PaymentMethod.CREDIT) {
             await tx.customer.update({
               where: { id: data.customerId },
-              data: { totalCredit: { increment: new Prisma.Decimal(data.total) } },
+              data: { totalCredit: { increment: new Prisma.Decimal(total) } },
             });
           }
 

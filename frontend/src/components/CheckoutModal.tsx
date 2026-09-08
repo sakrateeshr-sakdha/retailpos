@@ -6,37 +6,71 @@ import {
   QrCode,
   CreditCard,
   User,
+  Users,
+  Plus,
   AlertCircle,
   RefreshCw,
   ExternalLink,
 } from 'lucide-react';
 import QRCode from 'qrcode';
-import { PaymentMethod, Sale } from '../types/index';
+import { PaymentMethod, Sale, Customer } from '../types/index';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
-import { db } from '../services/db';
+import { db, cacheCustomers, getLocalCustomers } from '../services/db';
 
 interface CheckoutModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSaleComplete: (sale: Sale) => void;
+  defaultPaymentMethod?: PaymentMethod;
 }
 
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   isOpen,
   onClose,
   onSaleComplete,
+  defaultPaymentMethod = 'UPI',
 }) => {
   const { items, subtotal, discount, total, clearCart } = useCart();
   const { shop, user, isOnline } = useAuth();
 
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('UPI');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(defaultPaymentMethod);
   const [cashReceived, setCashReceived] = useState<string>('');
   const [customerPhone, setCustomerPhone] = useState<string>('');
   const [customerName, setCustomerName] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Customer Credit State
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
+  const [customerSearch, setCustomerSearch] = useState<string>('');
+  const [isQuickAddCustomer, setIsQuickAddCustomer] = useState<boolean>(false);
+  const [quickCustName, setQuickCustName] = useState<string>('');
+  const [quickCustPhone, setQuickCustPhone] = useState<string>('');
+
+  useEffect(() => {
+    if (isOpen) {
+      api.getCustomers()
+        .then((res) => {
+          setCustomers(res.customers);
+          cacheCustomers(res.customers);
+        })
+        .catch(() => {
+          getLocalCustomers().then(setCustomers);
+        });
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (isOpen && defaultPaymentMethod) {
+      setPaymentMethod(defaultPaymentMethod);
+      if (defaultPaymentMethod === 'CASH' && !cashReceived) {
+        setCashReceived(total.toString());
+      }
+    }
+  }, [isOpen, defaultPaymentMethod]);
 
   // UPI Dynamic QR States
   const [qrGenerated, setQrGenerated] = useState<boolean>(false);
@@ -105,6 +139,43 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       return;
     }
 
+    let finalCustomerId: string | null = null;
+    let finalCustomerName = customerName;
+    let finalCustomerPhone = customerPhone;
+
+    if (paymentMethod === 'CREDIT') {
+      if (isQuickAddCustomer) {
+        if (!quickCustName.trim()) {
+          setErrorMsg('Please enter customer name to charge to store credit');
+          return;
+        }
+        setLoading(true);
+        try {
+          const res = await api.createCustomer({
+            name: quickCustName.trim(),
+            phone: quickCustPhone.trim() || undefined,
+          });
+          finalCustomerId = res.customer.id;
+          finalCustomerName = res.customer.name;
+          finalCustomerPhone = res.customer.phone || '';
+        } catch (err: any) {
+          setErrorMsg(err.message || 'Failed to create customer');
+          setLoading(false);
+          return;
+        }
+      } else if (selectedCustomerId) {
+        finalCustomerId = selectedCustomerId;
+        const matched = customers.find((c) => c.id === selectedCustomerId);
+        if (matched) {
+          finalCustomerName = matched.name;
+          finalCustomerPhone = matched.phone || '';
+        }
+      } else {
+        setErrorMsg('Please select or add a customer to charge to store credit');
+        return;
+      }
+    }
+
     setLoading(true);
     setErrorMsg(null);
 
@@ -114,6 +185,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
     const salePayload = {
       idempotencyKey,
+      customerId: finalCustomerId,
       items: items.map((item) => ({
         productId: item.product.id,
         productName: item.product.name,
@@ -137,7 +209,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       ],
       cashReceived: paymentMethod === 'CASH' ? cashGivenNumber || total : null,
       changeGiven: paymentMethod === 'CASH' ? changeToReturn : null,
-      notes: customerPhone ? `Cust: ${customerName} (${customerPhone})` : null,
+      notes: finalCustomerPhone ? `Cust: ${finalCustomerName} (${finalCustomerPhone})` : finalCustomerName ? `Cust: ${finalCustomerName}` : null,
     };
 
     try {
@@ -151,6 +223,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         // Handle offline sale save
         await db.pendingSales.add({
           idempotencyKey,
+          customerId: finalCustomerId,
+          customerName: finalCustomerName,
           items: salePayload.items,
           subtotal,
           discount,
@@ -171,10 +245,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           }
         }
 
+        // If offline credit sale, update local customer credit balance
+        if (finalCustomerId && paymentMethod === 'CREDIT') {
+          const localCust = await db.customers.get(finalCustomerId);
+          if (localCust) {
+            const currentBalance = Number(localCust.totalCredit) || 0;
+            await db.customers.update(finalCustomerId, { totalCredit: (currentBalance + total) as any });
+          }
+        }
+
         const offlineSale: Sale = {
           id: idempotencyKey,
           shopId: shop?.id || 'offline-shop',
           userId: user?.id || 'offline-user',
+          customerId: finalCustomerId,
+          customer: finalCustomerId ? { id: finalCustomerId, name: finalCustomerName || 'Customer', phone: finalCustomerPhone } : null,
           invoiceNumber: `${invoiceNumber} (OFFLINE)`,
           subtotal,
           discount,
@@ -206,6 +291,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       // If network failed during online attempt, store offline as fallback
       await db.pendingSales.add({
         idempotencyKey,
+        customerId: finalCustomerId,
+        customerName: finalCustomerName,
         items: salePayload.items,
         subtotal,
         discount,
@@ -217,10 +304,20 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         synced: false,
       });
 
+      if (finalCustomerId && paymentMethod === 'CREDIT') {
+        const localCust = await db.customers.get(finalCustomerId);
+        if (localCust) {
+          const currentBalance = Number(localCust.totalCredit) || 0;
+          await db.customers.update(finalCustomerId, { totalCredit: (currentBalance + total) as any });
+        }
+      }
+
       const fallbackSale: Sale = {
         id: idempotencyKey,
         shopId: shop?.id || 'fallback-shop',
         userId: user?.id || 'fallback-user',
+        customerId: finalCustomerId,
+        customer: finalCustomerId ? { id: finalCustomerId, name: finalCustomerName || 'Customer', phone: finalCustomerPhone } : null,
         invoiceNumber: `${invoiceNumber} (OFFLINE)`,
         subtotal,
         discount,
@@ -253,7 +350,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="bg-white w-full max-w-sm sm:rounded-2xl rounded-t-2xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-200">
+      <div className="bg-white w-full max-w-md sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-200">
         {/* Header */}
         <div className="p-4 border-b border-gray-100 flex items-center justify-between">
           <div>
@@ -286,18 +383,18 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           {/* Payment Method Selector */}
           <div>
             <label className="text-xs font-semibold text-gray-700 block mb-1.5">Payment Method</label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
               <button
                 type="button"
                 onClick={() => setPaymentMethod('UPI')}
-                className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition active:scale-95 ${
+                className={`flex flex-col items-center justify-center p-2 sm:p-3 rounded-xl border-2 transition active:scale-95 ${
                   paymentMethod === 'UPI'
                     ? 'border-green-600 bg-green-50 text-green-700 font-bold'
                     : 'border-gray-200 text-gray-600 hover:border-gray-300'
                 }`}
               >
-                <QrCode className="w-6 h-6 mb-1" />
-                <span className="text-xs">UPI</span>
+                <QrCode className="w-5 h-5 mb-1" />
+                <span className="text-[11px] sm:text-xs">UPI</span>
               </button>
 
               <button
@@ -306,30 +403,155 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   setPaymentMethod('CASH');
                   if (!cashReceived) setCashReceived(total.toString());
                 }}
-                className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition active:scale-95 ${
+                className={`flex flex-col items-center justify-center p-2 sm:p-3 rounded-xl border-2 transition active:scale-95 ${
                   paymentMethod === 'CASH'
                     ? 'border-green-600 bg-green-50 text-green-700 font-bold'
                     : 'border-gray-200 text-gray-600 hover:border-gray-300'
                 }`}
               >
-                <Banknote className="w-6 h-6 mb-1" />
-                <span className="text-xs">Cash</span>
+                <Banknote className="w-5 h-5 mb-1" />
+                <span className="text-[11px] sm:text-xs">Cash</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setPaymentMethod('CARD')}
-                className={`flex flex-col items-center justify-center p-3 rounded-xl border-2 transition active:scale-95 ${
+                className={`flex flex-col items-center justify-center p-2 sm:p-3 rounded-xl border-2 transition active:scale-95 ${
                   paymentMethod === 'CARD'
                     ? 'border-green-600 bg-green-50 text-green-700 font-bold'
                     : 'border-gray-200 text-gray-600 hover:border-gray-300'
                 }`}
               >
-                <CreditCard className="w-6 h-6 mb-1" />
-                <span className="text-xs">Card</span>
+                <CreditCard className="w-5 h-5 mb-1" />
+                <span className="text-[11px] sm:text-xs">Card</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('CREDIT')}
+                className={`flex flex-col items-center justify-center p-2 sm:p-3 rounded-xl border-2 transition active:scale-95 ${
+                  paymentMethod === 'CREDIT'
+                    ? 'border-amber-600 bg-amber-50 text-amber-700 font-bold'
+                    : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                }`}
+              >
+                <Users className="w-5 h-5 mb-1" />
+                <span className="text-[11px] sm:text-xs">Credit</span>
               </button>
             </div>
           </div>
+
+          {/* STORE CREDIT: Customer Selection & Quick Add */}
+          {paymentMethod === 'CREDIT' && (
+            <div className="bg-amber-50/80 border border-amber-200 rounded-2xl p-3.5 space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-amber-900 uppercase tracking-wider flex items-center space-x-1.5">
+                  <Users className="w-4 h-4 text-amber-700" />
+                  <span>Customer Account (Store Credit)</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setIsQuickAddCustomer(!isQuickAddCustomer)}
+                  className="text-[11px] text-amber-800 hover:text-amber-900 font-bold flex items-center space-x-1 bg-amber-100 hover:bg-amber-200 px-2 py-0.5 rounded-lg transition"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>{isQuickAddCustomer ? 'Select Existing' : 'New Customer'}</span>
+                </button>
+              </div>
+
+              {isQuickAddCustomer ? (
+                <div className="space-y-2 bg-white p-3 rounded-xl border border-amber-200">
+                  <span className="text-[11px] font-bold text-gray-700 block">Quick Register Customer</span>
+                  <input
+                    type="text"
+                    value={quickCustName}
+                    onChange={(e) => setQuickCustName(e.target.value)}
+                    placeholder="Customer Full Name *"
+                    className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    required
+                  />
+                  <input
+                    type="tel"
+                    value={quickCustPhone}
+                    onChange={(e) => setQuickCustPhone(e.target.value)}
+                    placeholder="Phone Number (e.g. 9876543210)"
+                    className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-1.5 text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    value={customerSearch}
+                    onChange={(e) => setCustomerSearch(e.target.value)}
+                    placeholder="Search customer by name or phone..."
+                    className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 text-xs text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+
+                  <div className="max-h-36 overflow-y-auto space-y-1 bg-white p-1.5 rounded-xl border border-amber-200">
+                    {customers
+                      .filter((c) =>
+                        customerSearch
+                          ? c.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
+                            (c.phone && c.phone.includes(customerSearch))
+                          : true
+                      )
+                      .map((c) => {
+                        const isSelected = selectedCustomerId === c.id;
+                        const due = Number(c.totalCredit);
+                        return (
+                          <div
+                            key={c.id}
+                            onClick={() => setSelectedCustomerId(c.id)}
+                            className={`p-2 rounded-lg cursor-pointer flex items-center justify-between text-xs transition ${
+                              isSelected
+                                ? 'bg-amber-100 border border-amber-400 font-bold text-amber-950'
+                                : 'hover:bg-gray-50 text-gray-800'
+                            }`}
+                          >
+                            <div>
+                              <div>{c.name}</div>
+                              {c.phone && <div className="text-[10px] text-gray-500">{c.phone}</div>}
+                            </div>
+                            <div className="text-right">
+                              <span className="text-[10px] text-gray-400 block">Due</span>
+                              <span className={`font-bold ${due > 0 ? 'text-red-600' : 'text-gray-600'}`}>
+                                {currency}{due.toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    {customers.length === 0 && (
+                      <div className="p-3 text-center text-xs text-gray-400">
+                        No registered customers found.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Balance preview */}
+              {selectedCustomerId && !isQuickAddCustomer && (() => {
+                const selected = customers.find((c) => c.id === selectedCustomerId);
+                if (!selected) return null;
+                const currentDue = Number(selected.totalCredit);
+                const newDue = currentDue + total;
+                return (
+                  <div className="bg-amber-100/80 border border-amber-300 rounded-xl p-2.5 text-xs text-amber-950 flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] text-amber-800 uppercase font-bold block">Customer Selected</span>
+                      <span className="font-bold">{selected.name}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] text-amber-800 uppercase font-bold block">New Due Balance</span>
+                      <span className="font-black text-red-600">{currency}{newDue.toFixed(2)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
 
           {/* CASH: Quick Change Calculator */}
           {paymentMethod === 'CASH' && (

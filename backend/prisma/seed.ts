@@ -23,6 +23,16 @@ async function main() {
     },
   });
 
+  // 1.1 Shop Invoice Sequence
+  await prisma.shopInvoiceSequence.upsert({
+    where: { shopId: shop.id },
+    update: {},
+    create: {
+      shopId: shop.id,
+      nextInvoiceNumber: 1001,
+    },
+  });
+
   // 2. Create Users (Admin and Cashier)
   const passwordAdmin = await bcrypt.hash('admin123', 10);
   const passwordCashier = await bcrypt.hash('cashier123', 10);

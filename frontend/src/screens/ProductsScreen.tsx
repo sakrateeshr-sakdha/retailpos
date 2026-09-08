@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Search, Edit3, Trash2, X, AlertTriangle, Check, PackagePlus } from 'lucide-react';
+import { Plus, Search, Edit3, Trash2, X, AlertTriangle, Check, PackagePlus, FileSpreadsheet } from 'lucide-react';
 import { Product, Category } from '../types/index';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { cacheProducts } from '../services/db';
+import { ProductImportModal } from '../components/ProductImportModal';
 
 export const ProductsScreen: React.FC = () => {
   const { shop, isOnline, user } = useAuth();
@@ -16,6 +17,7 @@ export const ProductsScreen: React.FC = () => {
   // Modal states
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   // Form states
   const [formData, setFormData] = useState({
@@ -28,6 +30,8 @@ export const ProductsScreen: React.FC = () => {
     stockQuantity: '',
     unit: 'pcs',
     lowStockThreshold: '5',
+    hsnCode: '',
+    gstRate: '',
   });
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -68,6 +72,8 @@ export const ProductsScreen: React.FC = () => {
       stockQuantity: '',
       unit: 'pcs',
       lowStockThreshold: '5',
+      hsnCode: shop?.defaultHsnCode || '',
+      gstRate: shop?.defaultCgstRate ? (Number(shop.defaultCgstRate) + Number(shop.defaultSgstRate || 0)).toString() : '',
     });
     setErrorMsg(null);
     setIsAddModalOpen(true);
@@ -85,6 +91,8 @@ export const ProductsScreen: React.FC = () => {
       stockQuantity: p.stockQuantity.toString(),
       unit: p.unit || 'pcs',
       lowStockThreshold: p.lowStockThreshold.toString(),
+      hsnCode: p.hsnCode || '',
+      gstRate: p.gstRate !== null && p.gstRate !== undefined ? p.gstRate.toString() : '',
     });
     setErrorMsg(null);
     setIsAddModalOpen(true);
@@ -110,6 +118,8 @@ export const ProductsScreen: React.FC = () => {
       stockQuantity: Number(formData.stockQuantity) || 0,
       unit: formData.unit,
       lowStockThreshold: Number(formData.lowStockThreshold) || 5,
+      hsnCode: formData.hsnCode.trim() || null,
+      gstRate: formData.gstRate !== '' ? Number(formData.gstRate) : null,
     };
 
     try {
@@ -149,9 +159,9 @@ export const ProductsScreen: React.FC = () => {
   });
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-24 max-w-lg mx-auto">
+    <div className="min-h-screen pb-24 w-full">
       {/* Search & Actions Header */}
-      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 p-3 shadow-xs space-y-2.5">
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 p-3 shadow-xs space-y-2.5 rounded-2xl mb-3">
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
             <Search className="w-5 h-5 absolute left-3 top-2.5 text-gray-400" />
@@ -165,13 +175,26 @@ export const ProductsScreen: React.FC = () => {
           </div>
 
           {isAdmin && (
-            <button
-              onClick={openAddModal}
-              className="bg-green-600 hover:bg-green-700 text-white p-2.5 rounded-xl shadow-sm flex items-center justify-center active:scale-95 transition"
-              title="Add New Product"
-            >
-              <Plus className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setIsImportModalOpen(true)}
+                className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 px-3 py-2 rounded-xl shadow-xs flex items-center space-x-1.5 text-xs font-bold active:scale-95 transition"
+                title="Bulk Import Products (CSV / Excel)"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                <span className="hidden sm:inline">Import</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={openAddModal}
+                className="bg-green-600 hover:bg-green-700 text-white p-2.5 rounded-xl shadow-sm flex items-center justify-center active:scale-95 transition"
+                title="Add New Product"
+              >
+                <Plus className="w-5 h-5" />
+              </button>
+            </div>
           )}
         </div>
 
@@ -203,8 +226,8 @@ export const ProductsScreen: React.FC = () => {
         </div>
       </div>
 
-      {/* Products List */}
-      <div className="p-3 space-y-2">
+      {/* Products List Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
         {loading ? (
           <div className="py-12 text-center text-xs text-gray-500 animate-pulse">
             Loading products...
@@ -280,7 +303,7 @@ export const ProductsScreen: React.FC = () => {
       {/* Add / Edit Product Modal */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
-          <div className="bg-white w-full max-w-sm sm:rounded-2xl rounded-t-2xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-200">
+          <div className="bg-white w-full max-w-md sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-200">
             <div className="p-4 border-b border-gray-100 flex items-center justify-between">
               <h2 className="font-bold text-base text-gray-900">
                 {editingProduct ? 'Edit Product' : 'Add New Product'}
@@ -408,6 +431,36 @@ export const ProductsScreen: React.FC = () => {
                 </div>
               </div>
 
+              {shop?.gstEnabled && (
+                <div className="grid grid-cols-2 gap-2 bg-blue-50/50 p-3 rounded-xl border border-blue-100">
+                  <div>
+                    <label className="font-semibold text-gray-700 block mb-1">HSN Code</label>
+                    <input
+                      type="text"
+                      value={formData.hsnCode}
+                      onChange={(e) => setFormData({ ...formData, hsnCode: e.target.value })}
+                      placeholder="e.g. 0401"
+                      className="w-full bg-white border border-blue-200 rounded-xl px-3 py-2 text-sm font-mono text-gray-900 focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-semibold text-gray-700 block mb-1">GST Rate %</label>
+                    <select
+                      value={formData.gstRate}
+                      onChange={(e) => setFormData({ ...formData, gstRate: e.target.value })}
+                      className="w-full bg-white border border-blue-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="">Default ({shop?.defaultCgstRate ? Number(shop.defaultCgstRate) + Number(shop.defaultSgstRate || 0) : 0}%)</option>
+                      <option value="0">0% (Nil)</option>
+                      <option value="5">5%</option>
+                      <option value="12">12%</option>
+                      <option value="18">18%</option>
+                      <option value="28">28%</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
               <div className="pt-2">
                 <button
                   type="submit"
@@ -422,6 +475,13 @@ export const ProductsScreen: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Bulk Product Import Modal */}
+      <ProductImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onImportComplete={loadData}
+      />
     </div>
   );
 };

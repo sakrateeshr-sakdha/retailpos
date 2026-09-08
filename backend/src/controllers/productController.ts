@@ -13,6 +13,8 @@ const productSchema = z.object({
   stockQuantity: z.coerce.number().min(0, 'Stock quantity must be >= 0').default(0),
   unit: z.enum(['pcs', 'kg', 'g', 'litre', 'ml', 'packet', 'box', 'bottle']).default('pcs'),
   lowStockThreshold: z.coerce.number().min(0).default(5),
+  hsnCode: z.string().nullable().optional(),
+  gstRate: z.coerce.number().min(0).max(100).nullable().optional(),
   isActive: z.boolean().optional().default(true),
 });
 
@@ -172,6 +174,8 @@ export const createProduct = async (req: Request, res: Response, next: NextFunct
           stockQuantity: new Prisma.Decimal(data.stockQuantity),
           unit: data.unit,
           lowStockThreshold: new Prisma.Decimal(data.lowStockThreshold),
+          hsnCode: data.hsnCode?.trim() || null,
+          gstRate: data.gstRate !== undefined && data.gstRate !== null ? new Prisma.Decimal(data.gstRate) : null,
           isActive: data.isActive,
         },
         include: { category: true },
@@ -251,6 +255,8 @@ export const updateProduct = async (req: Request, res: Response, next: NextFunct
         ...(data.sellingPrice !== undefined && { sellingPrice: new Prisma.Decimal(data.sellingPrice) }),
         ...(data.unit !== undefined && { unit: data.unit }),
         ...(data.lowStockThreshold !== undefined && { lowStockThreshold: new Prisma.Decimal(data.lowStockThreshold) }),
+        ...(data.hsnCode !== undefined && { hsnCode: data.hsnCode?.trim() || null }),
+        ...(data.gstRate !== undefined && { gstRate: data.gstRate !== null ? new Prisma.Decimal(data.gstRate) : null }),
         ...(data.isActive !== undefined && { isActive: data.isActive }),
       };
 
@@ -319,3 +325,249 @@ export const deleteProduct = async (req: Request, res: Response, next: NextFunct
     next(error);
   }
 };
+
+const importItemSchema = z.object({
+  productName: z.string().min(1, 'Product name is required'),
+  barcode: z.string().nullable().optional().or(z.literal('')),
+  sku: z.string().nullable().optional().or(z.literal('')),
+  category: z.string().nullable().optional().or(z.literal('')),
+  purchasePrice: z.coerce.number().min(0, 'Purchase price must be >= 0').optional().default(0),
+  sellingPrice: z.coerce.number().gt(0, 'Selling price must be > 0'),
+  stock: z.coerce.number().min(0, 'Stock must be >= 0').optional().default(0),
+  unit: z.string().optional().default('pcs'),
+  lowStockThreshold: z.coerce.number().min(0).optional().default(5),
+  hsnCode: z.string().nullable().optional().or(z.literal('')),
+  gstRate: z.coerce.number().min(0).max(100).nullable().optional(),
+});
+
+const importPayloadSchema = z.object({
+  products: z.array(z.any()).min(1, 'At least one product is required for import'),
+  updateExisting: z.boolean().optional().default(false),
+  dryRun: z.boolean().optional().default(false),
+});
+
+export const importProducts = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const shopId = req.user!.shopId;
+    const parsedPayload = importPayloadSchema.safeParse(req.body);
+
+    if (!parsedPayload.success) {
+      res.status(400).json({
+        success: false,
+        message: parsedPayload.error.errors[0]?.message || 'Invalid import payload',
+      });
+      return;
+    }
+
+    const { products: rawRows, updateExisting, dryRun } = parsedPayload.data;
+
+    // Validate each row and check for duplicates within import payload
+    const errors: { row: number; field: string; message: string; data?: any }[] = [];
+    const validRows: (z.infer<typeof importItemSchema> & { rowIndex: number })[] = [];
+    const seenBarcodes = new Map<string, number>(); // barcode -> rowIndex
+
+    rawRows.forEach((raw, idx) => {
+      const rowIndex = idx + 1; // 1-indexed for human readability
+      const parsedRow = importItemSchema.safeParse(raw);
+
+      if (!parsedRow.success) {
+        parsedRow.error.errors.forEach((err) => {
+          errors.push({
+            row: rowIndex,
+            field: err.path.join('.') || 'general',
+            message: `Row ${rowIndex}: ${err.message}`,
+            data: raw,
+          });
+        });
+        return;
+      }
+
+      const row = parsedRow.data;
+      const cleanBarcode = row.barcode ? row.barcode.trim() : null;
+
+      if (cleanBarcode) {
+        if (seenBarcodes.has(cleanBarcode)) {
+          const prevRow = seenBarcodes.get(cleanBarcode)!;
+          errors.push({
+            row: rowIndex,
+            field: 'barcode',
+            message: `Row ${rowIndex}: Duplicate barcode "${cleanBarcode}" (already present in row ${prevRow})`,
+            data: raw,
+          });
+        } else {
+          seenBarcodes.set(cleanBarcode, rowIndex);
+        }
+      }
+
+      validRows.push({ ...row, barcode: cleanBarcode, rowIndex });
+    });
+
+    // Check duplicates against existing database products if not updateExisting
+    const barcodesToLookup = validRows
+      .map((r) => r.barcode)
+      .filter((b): b is string => Boolean(b));
+
+    if (barcodesToLookup.length > 0 && !updateExisting) {
+      const existingInDb = await prisma.product.findMany({
+        where: { shopId, barcode: { in: barcodesToLookup } },
+        select: { barcode: true, name: true },
+      });
+      const dbBarcodeMap = new Map<string, string>(
+        existingInDb.map((p) => [p.barcode!, p.name])
+      );
+
+      for (const row of validRows) {
+        if (row.barcode && dbBarcodeMap.has(row.barcode)) {
+          errors.push({
+            row: row.rowIndex,
+            field: 'barcode',
+            message: `Row ${row.rowIndex}: Duplicate barcode "${row.barcode}" already exists in database ("${dbBarcodeMap.get(row.barcode)}")`,
+            data: row,
+          });
+        }
+      }
+    }
+
+    // If dry run requested or if there are errors, return preview with errors
+    if (dryRun || errors.length > 0) {
+      res.status(errors.length > 0 ? 400 : 200).json({
+        success: errors.length === 0,
+        dryRun: Boolean(dryRun),
+        summary: {
+          total: rawRows.length,
+          valid: errors.length === 0 ? validRows.length : 0,
+          errorsCount: errors.length,
+        },
+        errors,
+        preview: validRows.slice(0, 10),
+      });
+      return;
+    }
+
+    // Execute atomic transaction for import
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Resolve unique categories
+      const categoryNames = Array.from(
+        new Set(
+          validRows
+            .map((r) => r.category?.trim())
+            .filter((c): c is string => Boolean(c && c.length > 0))
+        )
+      );
+
+      const existingCategories = await tx.category.findMany({
+        where: { shopId, name: { in: categoryNames } },
+      });
+      const categoryMap = new Map<string, string>(
+        existingCategories.map((c) => [c.name.toLowerCase(), c.id])
+      );
+
+      for (const catName of categoryNames) {
+        const lower = catName.toLowerCase();
+        if (!categoryMap.has(lower)) {
+          const createdCat = await tx.category.create({
+            data: { shopId, name: catName },
+          });
+          categoryMap.set(lower, createdCat.id);
+        }
+      }
+
+      // 2. Fetch existing products by barcode in this shop
+      const barcodesToLookup = validRows
+        .map((r) => r.barcode)
+        .filter((b): b is string => Boolean(b));
+
+      const existingProducts = await tx.product.findMany({
+        where: { shopId, barcode: { in: barcodesToLookup } },
+      });
+      const existingProductMap = new Map<string, (typeof existingProducts)[0]>(
+        existingProducts.map((p) => [p.barcode!, p])
+      );
+
+      let imported = 0;
+      let updated = 0;
+      let skipped = 0;
+
+      for (const item of validRows) {
+        const categoryId = item.category ? categoryMap.get(item.category.trim().toLowerCase()) || null : null;
+        const existing = item.barcode ? existingProductMap.get(item.barcode) : null;
+
+        if (existing) {
+          if (updateExisting) {
+            await tx.product.update({
+              where: { id: existing.id },
+              data: {
+                name: item.productName.trim(),
+                sku: item.sku?.trim() || existing.sku,
+                categoryId: categoryId || existing.categoryId,
+                purchasePrice: new Prisma.Decimal(item.purchasePrice || 0),
+                sellingPrice: new Prisma.Decimal(item.sellingPrice),
+                stockQuantity: new Prisma.Decimal(item.stock || 0),
+                unit: item.unit || existing.unit,
+                lowStockThreshold: new Prisma.Decimal(item.lowStockThreshold || 5),
+                hsnCode: item.hsnCode?.trim() || existing.hsnCode,
+                gstRate: item.gstRate !== undefined && item.gstRate !== null ? new Prisma.Decimal(item.gstRate) : existing.gstRate,
+                isActive: true,
+              },
+            });
+            updated++;
+          } else {
+            skipped++;
+          }
+        } else {
+          // New product
+          const newProd = await tx.product.create({
+            data: {
+              shopId,
+              name: item.productName.trim(),
+              barcode: item.barcode || null,
+              sku: item.sku?.trim() || null,
+              categoryId,
+              purchasePrice: new Prisma.Decimal(item.purchasePrice || 0),
+              sellingPrice: new Prisma.Decimal(item.sellingPrice),
+              stockQuantity: new Prisma.Decimal(item.stock || 0),
+              unit: item.unit || 'pcs',
+              lowStockThreshold: new Prisma.Decimal(item.lowStockThreshold || 5),
+              hsnCode: item.hsnCode?.trim() || null,
+              gstRate: item.gstRate !== undefined && item.gstRate !== null ? new Prisma.Decimal(item.gstRate) : null,
+              isActive: true,
+            },
+          });
+
+          if (item.stock && item.stock > 0) {
+            await tx.stockMovement.create({
+              data: {
+                shopId,
+                productId: newProd.id,
+                type: MovementType.PURCHASE,
+                quantity: new Prisma.Decimal(item.stock),
+                previousStock: new Prisma.Decimal(0),
+                newStock: new Prisma.Decimal(item.stock),
+                reason: 'Initial stock from bulk import',
+              },
+            });
+          }
+
+          imported++;
+        }
+      }
+
+      return { imported, updated, skipped, total: validRows.length };
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Import completed: ${result.imported} imported, ${result.updated} updated, ${result.skipped} skipped.`,
+      summary: {
+        total: result.total,
+        imported: result.imported,
+        updated: result.updated,
+        skipped: result.skipped,
+        errorsCount: 0,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+

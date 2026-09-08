@@ -21,6 +21,14 @@ export interface Shop {
   upiId?: string | null;
   receiptFooter?: string | null;
   allowNegativeStock: boolean;
+  adminPin?: string | null;
+  lastBackupAt?: string | null;
+  gstEnabled?: boolean;
+  gstType?: 'INCLUSIVE' | 'EXCLUSIVE';
+  defaultCgstRate?: number;
+  defaultSgstRate?: number;
+  defaultIgstRate?: number;
+  defaultHsnCode?: string | null;
 }
 
 export interface Category {
@@ -39,6 +47,8 @@ export interface Product {
   name: string;
   barcode?: string | null;
   sku?: string | null;
+  hsnCode?: string | null;
+  gstRate?: number | string | null;
   purchasePrice: number | string;
   sellingPrice: number | string;
   stockQuantity: number | string;
@@ -109,6 +119,8 @@ export interface Sale {
 export interface PendingSale {
   id?: number; // IndexedDB auto-increment id
   idempotencyKey: string;
+  customerId?: string | null;
+  customerName?: string | null;
   items: {
     productId: string;
     productName: string;
@@ -154,3 +166,62 @@ export interface SalesSummary {
     cardAmount: number;
   };
 }
+
+export interface Customer {
+  id: string;
+  shopId: string;
+  name: string;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  totalCredit: number | string;
+  createdAt: string;
+  updatedAt: string;
+  sales?: Sale[];
+  payments?: CustomerPayment[];
+  _count?: {
+    sales: number;
+    payments: number;
+  };
+}
+
+export interface CustomerPayment {
+  id: string;
+  customerId: string;
+  amount: number | string;
+  paymentMethod: PaymentMethod;
+  notes?: string | null;
+  createdAt: string;
+  customer?: {
+    id: string;
+    name: string;
+    phone?: string | null;
+  };
+}
+
+export interface DailyClosing {
+  id: string;
+  shopId: string;
+  userId: string;
+  closingDate: string;
+  totalBills: number;
+  grossSales: number | string;
+  discounts: number | string;
+  netSales: number | string;
+  cashSales: number | string;
+  upiSales: number | string;
+  cardSales: number | string;
+  creditSales: number | string;
+  expectedCash: number | string;
+  actualCash: number | string;
+  cashDifference: number | string;
+  notes?: string | null;
+  closedAt: string;
+  user?: {
+    id: string;
+    name: string;
+    username: string;
+  };
+}
+
+

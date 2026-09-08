@@ -529,8 +529,9 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/95 flex flex-col justify-between max-w-lg mx-auto select-none overflow-hidden">
-      <canvas ref={cropCanvasRef} className="hidden" />
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-0 sm:p-4 select-none">
+      <div className="w-full max-w-lg h-full sm:h-auto sm:max-h-[92vh] bg-black sm:rounded-3xl flex flex-col justify-between overflow-hidden shadow-2xl relative">
+        <canvas ref={cropCanvasRef} className="hidden" />
       <canvas ref={filterCanvasRef} className="hidden" />
       <canvas ref={rotatedCanvasRef} className="hidden" />
 
@@ -722,28 +723,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
             <ArrowRight className="w-5 h-5" />
           </button>
         </form>
-
-        <div>
-          <div className="text-[10px] text-gray-400 mb-1 font-medium">Quick Tap Test Barcodes:</div>
-          <div className="flex flex-wrap gap-1">
-            {[
-              { name: 'Lip Balm (4.5g)', code: '890123400017' },
-              { name: 'Vicks (25g)', code: '890103000025' },
-              { name: 'Vicks (10g)', code: '890103070001' },
-              { name: 'Soap 100g', code: '890123400015' },
-              { name: 'Milk 1L', code: '890123400001' },
-            ].map((item) => (
-              <button
-                key={item.code}
-                type="button"
-                onClick={() => handleBarcodeFound(item.code)}
-                className="text-[11px] bg-gray-800 hover:bg-gray-700 border border-gray-700 px-2 py-0.5 rounded text-green-300 font-medium active:scale-95 transition"
-              >
-                {item.name}
-              </button>
-            ))}
-          </div>
-        </div>
+      </div>
       </div>
     </div>
   );

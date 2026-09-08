@@ -16,8 +16,11 @@ import {
   AlertTriangle,
   PackagePlus,
   Check,
+  ShoppingCart,
+  ShieldCheck,
+  Lock,
 } from 'lucide-react';
-import { Product, Category, Sale } from '../types/index';
+import { Product, Category, Sale, PaymentMethod } from '../types/index';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
@@ -27,7 +30,7 @@ import { CheckoutModal } from '../components/CheckoutModal';
 import { ReceiptModal } from '../components/ReceiptModal';
 
 export const BillingScreen: React.FC = () => {
-  const { shop, isOnline } = useAuth();
+  const { shop, user, isOnline } = useAuth();
   const {
     items,
     itemCount,
@@ -52,9 +55,16 @@ export const BillingScreen: React.FC = () => {
   // UI state
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [checkoutPaymentMethod, setCheckoutPaymentMethod] = useState<PaymentMethod>('UPI');
   const [isCartDrawerOpen, setIsCartDrawerOpen] = useState(false);
   const [showDiscountInput, setShowDiscountInput] = useState(false);
   const [completedSale, setCompletedSale] = useState<Sale | null>(null);
+
+  const handleOpenCheckout = (method: PaymentMethod = 'UPI') => {
+    setCheckoutPaymentMethod(method);
+    setIsCheckoutOpen(true);
+    setIsCartDrawerOpen(false);
+  };
 
   // Toast & Quick Add on scan
   const [toast, setToast] = useState<{
@@ -66,6 +76,12 @@ export const BillingScreen: React.FC = () => {
   const [quickAddName, setQuickAddName] = useState('');
   const [quickAddPrice, setQuickAddPrice] = useState('');
   const [quickAddSaving, setQuickAddSaving] = useState(false);
+
+  // Admin PIN verification for Cashiers
+  const [isAdminPinModalOpen, setIsAdminPinModalOpen] = useState(false);
+  const [adminPin, setAdminPin] = useState('');
+  const [adminPinError, setAdminPinError] = useState<string | null>(null);
+  const [adminPinVerifying, setAdminPinVerifying] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const currency = shop?.currency || '₹';
@@ -223,12 +239,15 @@ export const BillingScreen: React.FC = () => {
         );
       } else {
         playWarningBeep();
+        setQuickAddBarcode(cleanCode);
+        setQuickAddName('');
+        setQuickAddPrice('');
         showToast(
-          `Barcode "${cleanCode}" not found in inventory.`,
+          `Barcode "${cleanCode}" not found. Please register product.`,
           'warning',
           cleanCode
         );
-        setSearchQuery(cleanCode);
+        setSearchQuery('');
       }
     } catch (err: any) {
       showToast(`Error scanning: ${err.message || 'Failed'}`, 'error');
@@ -281,28 +300,48 @@ export const BillingScreen: React.FC = () => {
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      if (searchResults.length > 0) {
+      const trimmed = searchQuery.trim();
+      if (!trimmed) return;
+
+      const exactMatch = catalogProducts.find(
+        (p) => p.barcode && p.barcode.trim().toLowerCase() === trimmed.toLowerCase()
+      );
+      if (exactMatch) {
+        handleSelectProduct(exactMatch);
+      } else if (searchResults.length > 0) {
         handleSelectProduct(searchResults[0]);
-      } else if (searchQuery.trim()) {
-        handleBarcodeScanned(searchQuery);
+      } else {
+        handleBarcodeScanned(trimmed);
       }
     }
   };
 
-  const handleQuickAddProduct = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleQuickAddProduct = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!quickAddName.trim() || !quickAddPrice || !quickAddBarcode) return;
 
+    if (user?.role !== 'ADMIN') {
+      // Cashier requires admin PIN authorization
+      setAdminPin('');
+      setAdminPinError(null);
+      setIsAdminPinModalOpen(true);
+      return;
+    }
+
+    await executeQuickAddProduct();
+  };
+
+  const executeQuickAddProduct = async (adminPinToken?: string) => {
     setQuickAddSaving(true);
     try {
       const payload = {
         name: quickAddName.trim(),
-        barcode: quickAddBarcode.trim(),
+        barcode: quickAddBarcode?.trim(),
         sellingPrice: Number(quickAddPrice),
         stockQuantity: 50,
         unit: 'pcs',
       };
-      const res = await api.createProduct(payload);
+      const res = await api.createProduct(payload, adminPinToken);
       addItem(res.product, 1);
       playSuccessBeep();
       showToast(`✓ Created & added "${res.product.name}" to cart!`, 'success');
@@ -310,11 +349,35 @@ export const BillingScreen: React.FC = () => {
       setQuickAddName('');
       setQuickAddPrice('');
       setToast(null);
+      setIsAdminPinModalOpen(false);
       await loadInitialData();
     } catch (err: any) {
       alert(err.message || 'Failed to save product');
     } finally {
       setQuickAddSaving(false);
+    }
+  };
+
+  const handleVerifyAdminPinAndQuickAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adminPin || adminPin.trim().length < 4) {
+      setAdminPinError('Please enter the 4-digit Manager PIN');
+      return;
+    }
+
+    setAdminPinVerifying(true);
+    setAdminPinError(null);
+    try {
+      const authRes = await api.verifyAdminPin(adminPin.trim());
+      if (authRes.success && authRes.adminAuthToken) {
+        await executeQuickAddProduct(authRes.adminAuthToken);
+      } else {
+        setAdminPinError('Invalid Admin PIN');
+      }
+    } catch (err: any) {
+      setAdminPinError(err.message || 'Invalid Manager PIN. Please try again.');
+    } finally {
+      setAdminPinVerifying(false);
     }
   };
 
@@ -324,9 +387,11 @@ export const BillingScreen: React.FC = () => {
   });
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-50 pb-36 max-w-lg mx-auto select-none">
-      {/* Toast Notification Banner */}
-      {toast && (
+    <div className="flex flex-col lg:flex-row gap-5 pb-36 lg:pb-8 w-full select-none items-start">
+      {/* LEFT COLUMN: Catalog, Search & Categories */}
+      <div className="flex-1 w-full min-w-0 flex flex-col bg-white rounded-2xl shadow-xs border border-gray-200 overflow-hidden">
+        {/* Toast Notification Banner */}
+        {toast && (
         <div
           className={`sticky top-0 z-30 px-3 py-2 flex items-center justify-between shadow-md transition animate-in slide-in-from-top duration-150 ${
             toast.type === 'success'
@@ -503,15 +568,15 @@ export const BillingScreen: React.FC = () => {
       </div>
 
       {/* Quick Catalog Grid for One-Tap Adding */}
-      <div className="p-3">
-        <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center justify-between">
+      <div className="p-3 sm:p-4">
+        <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2.5 flex items-center justify-between">
           <span>Tap to Add to Cart</span>
           <span className="text-[11px] font-normal lowercase text-gray-400">
             {filteredCatalog.length} products
           </span>
         </div>
 
-        <div className="grid grid-cols-2 gap-2.5">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-2.5 sm:gap-3">
           {filteredCatalog.map((prod) => {
             const inCart = items.find((i) => i.product.id === prod.id);
             const stock = Number(prod.stockQuantity);
@@ -521,7 +586,7 @@ export const BillingScreen: React.FC = () => {
               <button
                 key={prod.id}
                 onClick={() => addItem(prod, 1)}
-                className={`p-3 rounded-2xl border text-left flex flex-col justify-between h-28 relative shadow-xs transition active:scale-96 ${
+                className={`p-3 rounded-2xl border text-left flex flex-col justify-between min-h-[7.5rem] relative shadow-xs transition active:scale-96 hover:shadow-sm ${
                   inCart
                     ? 'bg-green-50 border-green-400 ring-2 ring-green-500/20'
                     : 'bg-white border-gray-200 hover:border-gray-300'
@@ -559,144 +624,283 @@ export const BillingScreen: React.FC = () => {
           })}
         </div>
       </div>
+    </div>
 
-      {/* Slide-Up Expanded Cart Drawer Modal / Bottom Sheet */}
-      {isCartDrawerOpen && (
-        <div className="fixed inset-0 z-40 bg-black/50 backdrop-blur-xs flex flex-col justify-end max-w-lg mx-auto">
-          <div className="bg-white rounded-t-3xl max-h-[80vh] flex flex-col shadow-2xl animate-in slide-in-from-bottom duration-200">
-            {/* Drawer Header */}
-            <div className="p-4 border-b border-gray-200 flex items-center justify-between bg-gray-50 rounded-t-3xl">
-              <div className="flex items-center space-x-2">
-                <span className="font-extrabold text-base text-gray-900">
-                  Current Bill ({itemCount} items)
+    {/* RIGHT COLUMN: Desktop & Tablet Persistent POS Cart Panel */}
+    <div className="hidden lg:flex lg:w-96 xl:w-[420px] flex-col bg-white rounded-2xl shadow-xs border border-gray-200 sticky top-16 max-h-[calc(100vh-5.5rem)] overflow-hidden">
+      {/* Drawer Header */}
+      <div className="p-4 border-b border-gray-200 flex items-center justify-between bg-gray-50 rounded-t-2xl">
+        <div className="flex items-center space-x-2">
+          <span className="font-extrabold text-base text-gray-900">
+            Current Bill ({itemCount} items)
+          </span>
+        </div>
+        {items.length > 0 && (
+          <button
+            onClick={clearCart}
+            className="text-xs text-red-600 hover:text-red-700 font-semibold flex items-center gap-1 hover:bg-red-50 px-2 py-1 rounded-lg transition"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Clear</span>
+          </button>
+        )}
+      </div>
+
+      {/* Cart Items List */}
+      <div className="p-4 overflow-y-auto flex-1 divide-y divide-gray-100">
+        {items.length === 0 ? (
+          <div className="py-16 text-center text-gray-400 text-sm space-y-2">
+            <ShoppingCart className="w-10 h-10 mx-auto text-gray-300 stroke-[1.5]" />
+            <div className="font-semibold text-gray-600">Your cart is empty</div>
+            <p className="text-xs text-gray-400">Click products or scan barcodes to begin billing</p>
+          </div>
+        ) : (
+          items.map((item) => (
+            <div key={item.product.id} className="py-3 flex items-center justify-between">
+              <div className="flex-1 pr-2">
+                <div className="font-bold text-sm text-gray-900 leading-tight">
+                  {item.product.name}
+                </div>
+                <div className="text-xs text-gray-500 mt-0.5">
+                  {currency}{item.unitPrice} × {item.quantity} ={' '}
+                  <span className="font-semibold text-gray-900">
+                    {currency}{item.totalPrice.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Quantity Stepper */}
+              <div className="flex items-center space-x-1.5">
+                <button
+                  onClick={() => updateQuantity(item.product.id, -1)}
+                  className="w-7 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-800 flex items-center justify-center font-bold active:scale-95 transition"
+                >
+                  <Minus className="w-3.5 h-3.5" />
+                </button>
+                <span className="w-6 text-center font-extrabold text-sm text-gray-900">
+                  {item.quantity}
                 </span>
-              </div>
-              <div className="flex items-center space-x-3">
-                {items.length > 0 && (
-                  <button
-                    onClick={clearCart}
-                    className="text-xs text-red-600 hover:text-red-700 font-semibold flex items-center gap-1"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Clear</span>
-                  </button>
-                )}
                 <button
-                  onClick={() => setIsCartDrawerOpen(false)}
-                  className="p-1.5 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-200"
+                  onClick={() => updateQuantity(item.product.id, 1)}
+                  className="w-7 h-7 rounded-lg bg-green-600 hover:bg-green-700 text-white flex items-center justify-center font-bold active:scale-95 transition"
                 >
-                  <ChevronDown className="w-5 h-5" />
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => removeItem(item.product.id)}
+                  className="p-1 text-gray-400 hover:text-red-500 ml-1 rounded transition"
+                  title="Remove item"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
+          ))
+        )}
+      </div>
 
-            {/* Cart Items List */}
-            <div className="p-4 overflow-y-auto flex-1 divide-y divide-gray-100">
-              {items.length === 0 ? (
-                <div className="py-12 text-center text-gray-400 text-sm">
-                  Your cart is empty. Tap products or scan barcode to add.
-                </div>
-              ) : (
-                items.map((item) => (
-                  <div key={item.product.id} className="py-3 flex items-center justify-between">
-                    <div className="flex-1 pr-2">
-                      <div className="font-bold text-sm text-gray-900 leading-tight">
-                        {item.product.name}
-                      </div>
-                      <div className="text-xs text-gray-500 mt-0.5">
-                        {currency}{item.unitPrice} × {item.quantity} ={' '}
-                        <span className="font-semibold text-gray-900">
-                          {currency}{item.totalPrice.toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
+      {/* Bill Summary & Desktop Quick Checkout */}
+      {items.length > 0 && (
+        <div className="p-4 bg-gray-50 border-t border-gray-200 space-y-3">
+          <div className="flex justify-between text-xs text-gray-600">
+            <span>Subtotal</span>
+            <span>{currency}{subtotal.toFixed(2)}</span>
+          </div>
 
-                    {/* Quantity Stepper (Large touch targets) */}
-                    <div className="flex items-center space-x-2">
-                      <button
-                        onClick={() => updateQuantity(item.product.id, -1)}
-                        className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-800 flex items-center justify-center font-bold active:scale-95"
-                      >
-                        <Minus className="w-4 h-4" />
-                      </button>
-                      <span className="w-7 text-center font-extrabold text-sm text-gray-900">
-                        {item.quantity}
-                      </span>
-                      <button
-                        onClick={() => updateQuantity(item.product.id, 1)}
-                        className="w-8 h-8 rounded-lg bg-green-600 hover:bg-green-700 text-white flex items-center justify-center font-bold active:scale-95"
-                      >
-                        <Plus className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => removeItem(item.product.id)}
-                        className="p-1 text-gray-400 hover:text-red-500 ml-1"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* Bill Summary & Quick Discount */}
-            {items.length > 0 && (
-              <div className="p-4 bg-gray-50 border-t border-gray-200 space-y-2">
-                <div className="flex justify-between text-xs text-gray-600">
-                  <span>Subtotal</span>
-                  <span>{currency}{subtotal.toFixed(2)}</span>
-                </div>
-
-                {/* Discount toggle */}
-                <div className="flex items-center justify-between text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setShowDiscountInput(!showDiscountInput)}
-                    className="text-green-700 font-semibold flex items-center gap-1"
-                  >
-                    <Percent className="w-3.5 h-3.5" />
-                    <span>{discount > 0 ? `Discount: -${currency}${discount}` : '+ Add Discount'}</span>
-                  </button>
-                  {showDiscountInput && (
-                    <div className="flex items-center gap-1">
-                      <span className="text-gray-500">{currency}</span>
-                      <input
-                        type="number"
-                        value={discount || ''}
-                        onChange={(e) => setDiscount(Math.max(0, Number(e.target.value)))}
-                        placeholder="0"
-                        className="w-16 bg-white border border-gray-300 rounded px-2 py-0.5 text-xs text-right font-bold"
-                      />
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex justify-between text-base font-extrabold text-gray-900 pt-1 border-t border-gray-200">
-                  <span>Net Total:</span>
-                  <span>{currency}{total.toFixed(2)}</span>
-                </div>
-
-                <button
-                  onClick={() => {
-                    setIsCartDrawerOpen(false);
-                    setIsCheckoutOpen(true);
-                  }}
-                  className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold text-sm shadow-md active:scale-98 transition flex items-center justify-center gap-2"
-                >
-                  <span>Proceed to Payment</span>
-                  <span>•</span>
-                  <span>{currency}{total.toFixed(2)}</span>
-                </button>
+          {/* Discount toggle */}
+          <div className="flex items-center justify-between text-xs">
+            <button
+              type="button"
+              onClick={() => setShowDiscountInput(!showDiscountInput)}
+              className="text-green-700 font-semibold flex items-center gap-1 hover:underline"
+            >
+              <Percent className="w-3.5 h-3.5" />
+              <span>{discount > 0 ? `Discount: -${currency}${discount}` : '+ Add Discount'}</span>
+            </button>
+            {showDiscountInput && (
+              <div className="flex items-center gap-1">
+                <span className="text-gray-500">{currency}</span>
+                <input
+                  type="number"
+                  value={discount || ''}
+                  onChange={(e) => setDiscount(Math.max(0, Number(e.target.value)))}
+                  placeholder="0"
+                  className="w-16 bg-white border border-gray-300 rounded px-2 py-0.5 text-xs text-right font-bold"
+                />
               </div>
             )}
           </div>
+
+          <div className="flex justify-between text-lg font-black text-gray-900 pt-1 border-t border-gray-200">
+            <span>Net Total:</span>
+            <span className="text-green-700">{currency}{total.toFixed(2)}</span>
+          </div>
+
+          {/* Fast Cash / UPI Buttons */}
+          <div className="grid grid-cols-2 gap-2 pt-1">
+            <button
+              onClick={() => handleOpenCheckout('UPI')}
+              className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white py-2.5 rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 shadow-xs transition"
+            >
+              <QrCode className="w-4 h-4" />
+              <span>Pay UPI</span>
+            </button>
+            <button
+              onClick={() => handleOpenCheckout('CASH')}
+              className="bg-green-600 hover:bg-green-700 active:scale-95 text-white py-2.5 rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 shadow-xs transition"
+            >
+              <Banknote className="w-4 h-4" />
+              <span>Pay CASH</span>
+            </button>
+          </div>
+
+          <button
+            onClick={() => handleOpenCheckout('UPI')}
+            className="w-full bg-gray-900 hover:bg-black text-white py-3 rounded-xl font-bold text-sm shadow-md active:scale-98 transition flex items-center justify-center gap-2"
+          >
+            <span>Proceed to Checkout</span>
+            <span>•</span>
+            <span>{currency}{total.toFixed(2)}</span>
+          </button>
         </div>
       )}
+    </div>
 
-      {/* Floating Bottom Sticky Checkout Bar */}
-      {items.length > 0 && (
-        <div className="fixed bottom-16 left-0 right-0 z-20 max-w-lg mx-auto p-2 bg-gradient-to-t from-gray-900/90 to-gray-900/80 backdrop-blur-md rounded-t-2xl shadow-2xl border-t border-gray-700">
+    {/* Mobile Slide-Up Expanded Cart Drawer Modal / Bottom Sheet */}
+    {isCartDrawerOpen && (
+      <div className="fixed inset-0 z-40 bg-black/50 backdrop-blur-xs flex flex-col justify-end lg:hidden">
+        <div className="bg-white rounded-t-3xl max-h-[85vh] flex flex-col shadow-2xl max-w-lg mx-auto w-full animate-in slide-in-from-bottom duration-200">
+          {/* Drawer Header */}
+          <div className="p-4 border-b border-gray-200 flex items-center justify-between bg-gray-50 rounded-t-3xl">
+            <div className="flex items-center space-x-2">
+              <span className="font-extrabold text-base text-gray-900">
+                Current Bill ({itemCount} items)
+              </span>
+            </div>
+            <div className="flex items-center space-x-3">
+              {items.length > 0 && (
+                <button
+                  onClick={clearCart}
+                  className="text-xs text-red-600 hover:text-red-700 font-semibold flex items-center gap-1"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Clear</span>
+                </button>
+              )}
+              <button
+                onClick={() => setIsCartDrawerOpen(false)}
+                className="p-1.5 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-200"
+              >
+                <ChevronDown className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Cart Items List */}
+          <div className="p-4 overflow-y-auto flex-1 divide-y divide-gray-100">
+            {items.length === 0 ? (
+              <div className="py-12 text-center text-gray-400 text-sm">
+                Your cart is empty. Tap products or scan barcode to add.
+              </div>
+            ) : (
+              items.map((item) => (
+                <div key={item.product.id} className="py-3 flex items-center justify-between">
+                  <div className="flex-1 pr-2">
+                    <div className="font-bold text-sm text-gray-900 leading-tight">
+                      {item.product.name}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      {currency}{item.unitPrice} × {item.quantity} ={' '}
+                      <span className="font-semibold text-gray-900">
+                        {currency}{item.totalPrice.toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Quantity Stepper (Large touch targets) */}
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => updateQuantity(item.product.id, -1)}
+                      className="w-8 h-8 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-800 flex items-center justify-center font-bold active:scale-95"
+                    >
+                      <Minus className="w-4 h-4" />
+                    </button>
+                    <span className="w-7 text-center font-extrabold text-sm text-gray-900">
+                      {item.quantity}
+                    </span>
+                    <button
+                      onClick={() => updateQuantity(item.product.id, 1)}
+                      className="w-8 h-8 rounded-lg bg-green-600 hover:bg-green-700 text-white flex items-center justify-center font-bold active:scale-95"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => removeItem(item.product.id)}
+                      className="p-1 text-gray-400 hover:text-red-500 ml-1"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Bill Summary & Quick Discount */}
+          {items.length > 0 && (
+            <div className="p-4 bg-gray-50 border-t border-gray-200 space-y-2">
+              <div className="flex justify-between text-xs text-gray-600">
+                <span>Subtotal</span>
+                <span>{currency}{subtotal.toFixed(2)}</span>
+              </div>
+
+              {/* Discount toggle */}
+              <div className="flex items-center justify-between text-xs">
+                <button
+                  type="button"
+                  onClick={() => setShowDiscountInput(!showDiscountInput)}
+                  className="text-green-700 font-semibold flex items-center gap-1"
+                >
+                  <Percent className="w-3.5 h-3.5" />
+                  <span>{discount > 0 ? `Discount: -${currency}${discount}` : '+ Add Discount'}</span>
+                </button>
+                {showDiscountInput && (
+                  <div className="flex items-center gap-1">
+                    <span className="text-gray-500">{currency}</span>
+                    <input
+                      type="number"
+                      value={discount || ''}
+                      onChange={(e) => setDiscount(Math.max(0, Number(e.target.value)))}
+                      placeholder="0"
+                      className="w-16 bg-white border border-gray-300 rounded px-2 py-0.5 text-xs text-right font-bold"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-between text-base font-extrabold text-gray-900 pt-1 border-t border-gray-200">
+                <span>Net Total:</span>
+                <span>{currency}{total.toFixed(2)}</span>
+              </div>
+
+              <button
+                onClick={() => handleOpenCheckout('UPI')}
+                className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-bold text-sm shadow-md active:scale-98 transition flex items-center justify-center gap-2"
+              >
+                <span>Proceed to Payment</span>
+                <span>•</span>
+                <span>{currency}{total.toFixed(2)}</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+
+    {/* Floating Bottom Sticky Checkout Bar (Mobile Only) */}
+    {items.length > 0 && (
+      <div className="fixed bottom-16 left-0 right-0 z-20 lg:hidden px-3 max-w-xl mx-auto">
+        <div className="p-2 bg-gradient-to-t from-gray-900/95 to-gray-900/85 backdrop-blur-md rounded-2xl shadow-2xl border border-gray-700">
           <div className="flex items-center justify-between px-2 py-1">
             {/* Left: Cart Info & Tap to Expand */}
             <button
@@ -717,7 +921,7 @@ export const BillingScreen: React.FC = () => {
             {/* Right: Instant Payment Buttons (UPI & CASH) */}
             <div className="flex items-center space-x-2">
               <button
-                onClick={() => setIsCheckoutOpen(true)}
+                onClick={() => handleOpenCheckout('UPI')}
                 className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white px-3.5 py-2.5 rounded-xl font-bold text-xs flex items-center space-x-1.5 shadow-md transition"
               >
                 <QrCode className="w-4 h-4" />
@@ -725,7 +929,7 @@ export const BillingScreen: React.FC = () => {
               </button>
 
               <button
-                onClick={() => setIsCheckoutOpen(true)}
+                onClick={() => handleOpenCheckout('CASH')}
                 className="bg-green-600 hover:bg-green-700 active:scale-95 text-white px-3.5 py-2.5 rounded-xl font-bold text-xs flex items-center space-x-1.5 shadow-md transition"
               >
                 <Banknote className="w-4 h-4" />
@@ -734,7 +938,8 @@ export const BillingScreen: React.FC = () => {
             </div>
           </div>
         </div>
-      )}
+      </div>
+    )}
 
       {/* Quick Add Product Modal when Barcode is Not in System */}
       {quickAddBarcode && (
@@ -797,6 +1002,89 @@ export const BillingScreen: React.FC = () => {
         </div>
       )}
 
+      {/* ADMIN PIN VERIFICATION MODAL FOR CASHIER QUICK-ADD */}
+      {isAdminPinModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 bg-amber-100 text-amber-700 rounded-xl">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-gray-900">Manager Authorization</h3>
+                  <p className="text-[11px] text-gray-500">Admin PIN required to add product</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAdminPinModalOpen(false)}
+                className="p-1 text-gray-400 hover:text-gray-600 rounded-full"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-600">
+              Cashiers require manager approval to register <span className="font-semibold text-gray-900">"{quickAddName}"</span> to the store catalog.
+            </p>
+
+            {adminPinError && (
+              <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl p-2.5 font-medium flex items-center space-x-1.5">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                <span>{adminPinError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleVerifyAdminPinAndQuickAdd} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                  Enter 4-Digit Manager PIN
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 absolute left-3.5 top-3.5 text-gray-400" />
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={6}
+                    autoFocus
+                    value={adminPin}
+                    onChange={(e) => setAdminPin(e.target.value)}
+                    placeholder="••••"
+                    className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-4 py-2.5 text-center text-lg tracking-widest font-mono font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white transition"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAdminPinModalOpen(false)}
+                  className="py-2.5 px-3 border border-gray-300 text-gray-700 rounded-xl font-semibold text-xs hover:bg-gray-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={adminPinVerifying || adminPin.length < 4}
+                  className="py-2.5 px-3 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl font-bold text-xs shadow-sm transition flex items-center justify-center space-x-1"
+                >
+                  {adminPinVerifying ? (
+                    <span>Verifying...</span>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Authorize</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Modals */}
       <BarcodeScannerModal
         isOpen={isScannerOpen}
@@ -806,6 +1094,7 @@ export const BillingScreen: React.FC = () => {
 
       <CheckoutModal
         isOpen={isCheckoutOpen}
+        defaultPaymentMethod={checkoutPaymentMethod}
         onClose={() => setIsCheckoutOpen(false)}
         onSaleComplete={(sale) => setCompletedSale(sale)}
       />

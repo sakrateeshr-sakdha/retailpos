@@ -1,15 +1,21 @@
 import Dexie, { type Table } from 'dexie';
-import { Product, PendingSale } from '../types/index';
+import { Product, PendingSale, Customer } from '../types/index';
 
 export class RetailPOSDatabase extends Dexie {
   products!: Table<Product, string>;
   pendingSales!: Table<PendingSale, number>;
+  customers!: Table<Customer, string>;
 
   constructor() {
     super('RetailPOS_DB');
     this.version(1).stores({
       products: 'id, name, barcode, sku, categoryId, isActive',
       pendingSales: '++id, idempotencyKey, invoiceNumber, createdAt, synced',
+    });
+    this.version(2).stores({
+      products: 'id, name, barcode, sku, categoryId, isActive',
+      pendingSales: '++id, idempotencyKey, customerId, invoiceNumber, createdAt, synced',
+      customers: 'id, name, phone, shopId',
     });
   }
 }
@@ -44,3 +50,24 @@ export async function searchLocalProducts(query: string): Promise<Product[]> {
     .limit(20)
     .toArray();
 }
+
+// Helper to cache customers locally
+export async function cacheCustomers(customers: Customer[]): Promise<void> {
+  try {
+    await db.customers.clear();
+    await db.customers.bulkPut(customers);
+  } catch (err) {
+    console.error('Failed to cache customers locally in IndexedDB', err);
+  }
+}
+
+// Helper to get local customers
+export async function getLocalCustomers(): Promise<Customer[]> {
+  try {
+    return await db.customers.toArray();
+  } catch (err) {
+    console.error('Failed to read local customers from IndexedDB', err);
+    return [];
+  }
+}
+

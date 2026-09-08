@@ -44,3 +44,30 @@ export const requireAdmin = (req: Request, res: Response, next: NextFunction): v
   }
   next();
 };
+
+export const requireAdminOrPinAuth = (req: Request, res: Response, next: NextFunction): void => {
+  if (req.user && req.user.role === Role.ADMIN) {
+    next();
+    return;
+  }
+
+  const pinToken = req.headers['x-admin-pin-auth'] as string | undefined;
+  if (pinToken) {
+    try {
+      const decoded = jwt.verify(pinToken, JWT_SECRET) as any;
+      if (decoded && decoded.type === 'ADMIN_DELEGATED' && decoded.shopId === req.user?.shopId) {
+        next();
+        return;
+      }
+    } catch {
+      // Invalid or expired delegated token
+    }
+  }
+
+  res.status(403).json({
+    success: false,
+    message: 'Admin authorization required. Please provide a valid Admin PIN.',
+    requiresAdminAuth: true,
+  });
+};
+

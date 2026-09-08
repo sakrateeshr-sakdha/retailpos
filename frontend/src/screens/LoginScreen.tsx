@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
-import { ShoppingBag, Lock, User, AlertCircle, ArrowRight } from 'lucide-react';
+import { ShoppingBag, Lock, User, AlertCircle, ArrowRight, Store } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
-export const LoginScreen: React.FC = () => {
+interface LoginScreenProps {
+  onGoToOnboard?: () => void;
+}
+
+export const LoginScreen: React.FC<LoginScreenProps> = ({ onGoToOnboard }) => {
   const { login } = useAuth();
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,15 +32,9 @@ export const LoginScreen: React.FC = () => {
     }
   };
 
-  const setDemoCredentials = (u: string, p: string) => {
-    setUsername(u);
-    setPassword(p);
-    setError(null);
-  };
-
   return (
-    <div className="min-h-screen bg-gradient-to-b from-green-700 to-green-900 flex flex-col justify-center px-4 py-8 max-w-lg mx-auto">
-      <div className="bg-white rounded-3xl p-6 shadow-2xl space-y-6">
+    <div className="min-h-screen w-full bg-gradient-to-b from-green-700 to-green-900 flex items-center justify-center p-4 sm:p-6">
+      <div className="w-full max-w-md bg-white rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
         {/* App Branding */}
         <div className="text-center space-y-2">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-green-100 text-green-700 mb-1 shadow-inner">
@@ -107,28 +105,20 @@ export const LoginScreen: React.FC = () => {
           </button>
         </form>
 
-        {/* Demo Fast Login Helpers */}
-        <div className="pt-2 border-t border-gray-100 text-center space-y-2">
-          <span className="text-[11px] text-gray-400 font-semibold uppercase tracking-wider">
-            Quick Fill Demo Accounts
-          </span>
-          <div className="grid grid-cols-2 gap-2">
+
+        {/* Onboard / Register New Store Button */}
+        {onGoToOnboard && (
+          <div className="pt-2 border-t border-gray-100">
             <button
               type="button"
-              onClick={() => setDemoCredentials('admin', 'admin123')}
-              className="py-2 px-3 text-xs bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg text-gray-700 font-medium transition"
+              onClick={onGoToOnboard}
+              className="w-full bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 py-3 px-4 rounded-xl font-bold text-xs sm:text-sm transition flex items-center justify-center space-x-2"
             >
-              Shop Owner (Admin)
-            </button>
-            <button
-              type="button"
-              onClick={() => setDemoCredentials('cashier1', 'cashier123')}
-              className="py-2 px-3 text-xs bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg text-gray-700 font-medium transition"
-            >
-              Cashier Demo
+              <Store className="w-4 h-4 text-emerald-600" />
+              <span>New Store Owner? Register & Onboard</span>
             </button>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

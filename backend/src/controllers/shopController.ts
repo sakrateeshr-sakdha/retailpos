@@ -12,6 +12,13 @@ const updateShopSchema = z.object({
   upiId: z.string().nullable().optional(),
   receiptFooter: z.string().nullable().optional(),
   allowNegativeStock: z.boolean().optional(),
+  adminPin: z.string().min(4, 'Admin PIN must be at least 4 characters').max(10).optional(),
+  gstEnabled: z.boolean().optional(),
+  gstType: z.enum(['INCLUSIVE', 'EXCLUSIVE']).optional(),
+  defaultCgstRate: z.coerce.number().min(0).max(100).optional(),
+  defaultSgstRate: z.coerce.number().min(0).max(100).optional(),
+  defaultIgstRate: z.coerce.number().min(0).max(100).optional(),
+  defaultHsnCode: z.string().nullable().optional(),
 });
 
 export const getShop = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -26,7 +33,13 @@ export const getShop = async (req: Request, res: Response, next: NextFunction): 
       return;
     }
 
-    res.json({ success: true, shop });
+    // Mask adminPin for non-admins
+    const sanitizedShop = {
+      ...shop,
+      adminPin: req.user?.role === 'ADMIN' ? shop.adminPin : undefined,
+    };
+
+    res.json({ success: true, shop: sanitizedShop });
   } catch (error) {
     next(error);
   }

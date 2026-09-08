@@ -1,9 +1,9 @@
 import React from 'react';
-import { ShoppingCart, Package, BarChart3, ClipboardList, Settings } from 'lucide-react';
+import { ShoppingCart, Package, BarChart3, ClipboardList, Settings, Users } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 
-export type NavTab = 'billing' | 'products' | 'sales' | 'stock' | 'more';
+export type NavTab = 'billing' | 'products' | 'customers' | 'sales' | 'stock' | 'closing' | 'more';
 
 interface BottomNavProps {
   currentTab: NavTab;
@@ -18,35 +18,40 @@ export const BottomNav: React.FC<BottomNavProps> = ({ currentTab, onSelectTab })
     {
       id: 'billing',
       label: 'Billing',
-      icon: <ShoppingCart className="w-6 h-6" />,
+      icon: <ShoppingCart className="w-5 h-5 sm:w-6 sm:h-6" />,
       badge: itemCount > 0 ? itemCount : undefined,
     },
     {
       id: 'products',
       label: 'Products',
-      icon: <Package className="w-6 h-6" />,
+      icon: <Package className="w-5 h-5 sm:w-6 sm:h-6" />,
+    },
+    {
+      id: 'customers',
+      label: 'Customers',
+      icon: <Users className="w-5 h-5 sm:w-6 sm:h-6" />,
     },
     {
       id: 'sales',
       label: 'Sales',
-      icon: <BarChart3 className="w-6 h-6" />,
+      icon: <BarChart3 className="w-5 h-5 sm:w-6 sm:h-6" />,
     },
     {
       id: 'stock',
       label: 'Stock',
-      icon: <ClipboardList className="w-6 h-6" />,
+      icon: <ClipboardList className="w-5 h-5 sm:w-6 sm:h-6" />,
     },
     {
       id: 'more',
       label: 'More',
-      icon: <Settings className="w-6 h-6" />,
+      icon: <Settings className="w-5 h-5 sm:w-6 sm:h-6" />,
       badge: pendingSalesCount > 0 ? pendingSalesCount : undefined,
     },
   ];
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-30 max-w-lg mx-auto pb-safe">
-      <div className="flex items-center justify-around h-16">
+    <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-30 w-full md:hidden pb-safe shadow-lg">
+      <div className="flex items-center justify-around h-16 max-w-md mx-auto">
         {tabs.map((tab) => {
           const isActive = currentTab === tab.id;
           return (

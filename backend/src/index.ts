@@ -7,6 +7,9 @@ import categoryRoutes from './routes/categoryRoutes.js';
 import productRoutes from './routes/productRoutes.js';
 import saleRoutes from './routes/saleRoutes.js';
 import stockRoutes from './routes/stockRoutes.js';
+import customerRoutes from './routes/customerRoutes.js';
+import backupRoutes from './routes/backupRoutes.js';
+import closingRoutes from './routes/closingRoutes.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 dotenv.config();
@@ -18,9 +21,9 @@ const PORT = process.env.PORT || 5000;
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-pin-auth'],
 }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
 
 // Health Check
 app.get('/api/health', (_req, res) => {
@@ -38,6 +41,9 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/sales', saleRoutes);
 app.use('/api/stock', stockRoutes);
+app.use('/api/customers', customerRoutes);
+app.use('/api/backup', backupRoutes);
+app.use('/api/closing', closingRoutes);
 
 // Error Handler
 app.use(errorHandler);

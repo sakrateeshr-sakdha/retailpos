@@ -121,10 +121,10 @@ export const StockScreen: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-24 max-w-lg mx-auto">
+    <div className="min-h-screen pb-24 w-full space-y-4">
       {/* Top Tabs */}
-      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 p-2 shadow-xs">
-        <div className="grid grid-cols-4 gap-1">
+      <div className="sticky top-0 z-10 bg-white border border-gray-200 p-2 shadow-xs rounded-2xl">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 sm:gap-2">
           <button
             onClick={() => setActiveTab('alerts')}
             className={`py-2 text-xs font-semibold rounded-xl transition flex flex-col items-center justify-center relative ${
@@ -176,11 +176,11 @@ export const StockScreen: React.FC = () => {
         </div>
       </div>
 
-      <div className="p-3">
+      <div>
         {/* Tab 1: Low Stock Alerts */}
         {activeTab === 'alerts' && (
           <div className="space-y-3">
-            <div className="text-xs font-bold text-gray-500 uppercase tracking-wider flex justify-between items-center">
+            <div className="text-xs font-bold text-gray-500 uppercase tracking-wider flex justify-between items-center px-1">
               <span>Low Stock Alerts ({lowStockProducts.length})</span>
               <span className="text-[11px] text-gray-400">Restock needed</span>
             </div>
@@ -194,7 +194,8 @@ export const StockScreen: React.FC = () => {
                 </div>
               </div>
             ) : (
-              lowStockProducts.map((p) => {
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {lowStockProducts.map((p) => {
                 const stock = Number(p.stockQuantity);
                 return (
                   <div
@@ -241,14 +242,15 @@ export const StockScreen: React.FC = () => {
                     </div>
                   </div>
                 );
-              })
+              })}
+              </div>
             )}
           </div>
         )}
 
         {/* Tab 2: Stock In (Purchases / Restock) */}
         {activeTab === 'inward' && (
-          <div className="bg-white border border-gray-200 rounded-2xl p-4 shadow-xs space-y-4">
+          <div className="max-w-2xl mx-auto bg-white border border-gray-200 rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
             <div>
               <h3 className="font-bold text-base text-gray-900">Add Stock (Inward)</h3>
               <p className="text-xs text-gray-500">Record incoming stock purchased from vendors</p>
@@ -315,7 +317,7 @@ export const StockScreen: React.FC = () => {
 
         {/* Tab 3: Stock Adjustment */}
         {activeTab === 'adjust' && (
-          <div className="bg-white border border-gray-200 rounded-2xl p-4 shadow-xs space-y-4">
+          <div className="max-w-2xl mx-auto bg-white border border-gray-200 rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
             <div>
               <h3 className="font-bold text-base text-gray-900">Stock Adjustment</h3>
               <p className="text-xs text-gray-500">Record damage, expired goods, or count corrections</p>
@@ -411,8 +413,8 @@ export const StockScreen: React.FC = () => {
 
         {/* Tab 4: Stock Movement Logs */}
         {activeTab === 'history' && (
-          <div className="space-y-2">
-            <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">
+          <div className="space-y-3">
+            <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1 px-1">
               Stock Movement History
             </div>
 
@@ -421,7 +423,8 @@ export const StockScreen: React.FC = () => {
                 No stock movement logs found.
               </div>
             ) : (
-              movements.map((m) => {
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                {movements.map((m) => {
                 const isAdd = m.type === 'PURCHASE' || m.type === 'RETURN';
                 return (
                   <div
@@ -464,7 +467,8 @@ export const StockScreen: React.FC = () => {
                     </div>
                   </div>
                 );
-              })
+              })}
+              </div>
             )}
           </div>
         )}

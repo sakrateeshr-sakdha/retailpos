@@ -44,6 +44,17 @@ model Shop {
   upiId              String?         @default("groceryshop@upi")
   receiptFooter      String?         @default("Thank You! Visit Again")
   allowNegativeStock Boolean         @default(false)
+  adminPin           String?         @default("1234")
+  lastBackupAt       DateTime?
+  
+  // GST Settings
+  gstEnabled         Boolean         @default(false)
+  gstType            String          @default("EXCLUSIVE") // INCLUSIVE or EXCLUSIVE
+  defaultCgstRate    Decimal         @default(2.5) @db.Decimal(5, 2)
+  defaultSgstRate    Decimal         @default(2.5) @db.Decimal(5, 2)
+  defaultIgstRate    Decimal         @default(0) @db.Decimal(5, 2)
+  defaultHsnCode     String?         @default("1905")
+
   createdAt          DateTime        @default(now())
   updatedAt          DateTime        @updatedAt
 
@@ -53,6 +64,9 @@ model Shop {
   sales              Sale[]
   customers          Customer[]
   stockMovements     StockMovement[]
+  invoiceSequence    ShopInvoiceSequence?
+  dailyClosings      DailyClosing[]
+  backupRecords      BackupRecord[]
 }
 
 model User {
@@ -68,6 +82,7 @@ model User {
 
   shop         Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
   sales        Sale[]
+  dailyClosings DailyClosing[]
 
   @@index([shopId])
   @@index([username])
@@ -95,6 +110,8 @@ model Product {
   name               String
   barcode            String?
   sku                String?
+  hsnCode            String?
+  gstRate            Decimal?        @db.Decimal(5, 2)
   purchasePrice      Decimal         @default(0) @db.Decimal(10, 2)
   sellingPrice       Decimal         @db.Decimal(10, 2)
   stockQuantity      Decimal         @default(0) @db.Decimal(10, 3)
@@ -120,7 +137,7 @@ model Sale {
   shopId         String
   userId         String
   customerId     String?
-  invoiceNumber  String         @unique
+  invoiceNumber  String
   idempotencyKey String?        @unique
   subtotal       Decimal        @db.Decimal(10, 2)
   discount       Decimal        @default(0) @db.Decimal(10, 2)
@@ -137,6 +154,7 @@ model Sale {
   items          SaleItem[]
   payments       Payment[]
 
+  @@unique([shopId, invoiceNumber])
   @@index([shopId])
   @@index([createdAt])
   @@index([customerId])
@@ -230,3 +248,59 @@ model CustomerPayment {
 
   @@index([customerId])
 }
+
+model ShopInvoiceSequence {
+  id                String   @id @default(uuid())
+  shopId            String   @unique
+  nextInvoiceNumber Int      @default(1001)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  shop              Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId])
+}
+
+model DailyClosing {
+  id             String   @id @default(uuid())
+  shopId         String
+  userId         String
+  closingDate    DateTime @default(now())
+  totalBills     Int
+  grossSales     Decimal  @db.Decimal(10, 2)
+  discounts      Decimal  @db.Decimal(10, 2)
+  netSales       Decimal  @db.Decimal(10, 2)
+  cashSales      Decimal  @db.Decimal(10, 2)
+  upiSales       Decimal  @db.Decimal(10, 2)
+  cardSales      Decimal  @db.Decimal(10, 2)
+  creditSales    Decimal  @db.Decimal(10, 2)
+  expectedCash   Decimal  @db.Decimal(10, 2)
+  actualCash     Decimal  @db.Decimal(10, 2)
+  cashDifference Decimal  @db.Decimal(10, 2)
+  notes          String?
+  closedAt       DateTime @default(now())
+
+  shop           Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  user           User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([shopId])
+  @@index([closingDate])
+}
+
+model BackupRecord {
+  id          String   @id @default(uuid())
+  shopId      String
+  fileName    String
+  fileSize    Int
+  recordCount Int
+  status      String   @default("SUCCESS")
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId])
+  @@index([createdAt])
+}
+
+
